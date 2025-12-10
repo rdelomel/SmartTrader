@@ -133,13 +133,8 @@ class DataStorage:
                 }
             )
             print("Database engine created")
-            
-            # Test connection before creating tables
-            print("Testing database connection...")
-            with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
-            print("Database connection test successful")
+            # Note: pool_pre_ping=True will automatically test connections when needed
+            # No need for explicit connection test here - it may cause memory issues
             
             print("Creating tables...")
             # Create tables with explicit transaction handling to avoid memory issues
