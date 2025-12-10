@@ -696,8 +696,9 @@ class TradingAgent:
         # Start dashboard in background
         import uvicorn
         import threading
+        port = int(os.getenv("PORT", 8000))  # Use Railway's PORT or default to 8000
         dashboard_thread = threading.Thread(
-            target=lambda: uvicorn.run(self.dashboard_app, host="0.0.0.0", port=8000),
+            target=lambda: uvicorn.run(self.dashboard_app, host="0.0.0.0", port=port),
             daemon=True
         )
         dashboard_thread.start()

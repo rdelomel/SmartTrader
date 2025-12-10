@@ -134,7 +134,9 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
             </div>
             
             <script>
-                const ws = new WebSocket('ws://localhost:8000/ws');
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsHost = window.location.host;
+                const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
                 
                 ws.onmessage = function(event) {
                     const data = JSON.parse(event.data);
@@ -983,7 +985,9 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
             }}
             
             // WebSocket for real-time dashboard updates
-            const ws = new WebSocket('ws://localhost:8000/ws');
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.host;
+            const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
             ws.onmessage = function(event) {{
                 const data = JSON.parse(event.data);
                 updateDashboard(data);
