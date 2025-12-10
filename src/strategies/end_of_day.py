@@ -42,15 +42,26 @@ class EndOfDayStrategy(BaseStrategy):
         if current_time is None:
             current_time = datetime.now()
         
-        # Check if within 30 minutes of close
-        close_time = time(self.close_hour, self.close_minute)
-        current_time_only = current_time.time()
+        # Handle both datetime objects and timestamps
+        if hasattr(current_time, 'time'):
+            current_time_only = current_time.time()
+        elif hasattr(current_time, 'hour'):
+            # It's already a time-like object
+            current_time_only = current_time
+        else:
+            # Try to extract from index or use current time
+            current_time = datetime.now()
+            current_time_only = current_time.time()
         
-        # Simple check: if hour matches and minute is close
+        # Check if within 1 hour of close (more lenient for crypto which trades 24/7)
+        # For crypto, consider last hour of day as "end of day"
         if current_time_only.hour == self.close_hour:
             return abs(current_time_only.minute - self.close_minute) <= 30
         elif current_time_only.hour == self.close_hour - 1:
             return current_time_only.minute >= 30
+        # For crypto 24/7 markets, also check if it's late in the day (after 20:00 UTC)
+        elif current_time_only.hour >= 20:  # 8 PM UTC onwards
+            return True
         
         return False
     

@@ -77,10 +77,10 @@ class NewsTradingStrategy(BaseStrategy):
             volume_ratio = current_volume / avg_volume
             volume_spike = volume_ratio >= self.volume_spike_multiplier
         
-        # Calculate recent price movement
-        price_change_1m = (current_price - data['close'].iloc[-1]) / data['close'].iloc[-1] if len(data) >= 1 else 0
-        price_change_5m = (current_price - data['close'].iloc[-5]) / data['close'].iloc[-5] if len(data) >= 5 else 0
-        price_change_10m = (current_price - data['close'].iloc[-10]) / data['close'].iloc[-10] if len(data) >= 10 else 0
+        # Calculate recent price movement (fix: compare to previous bars, not current)
+        price_change_1m = (current_price - data['close'].iloc[-2]) / data['close'].iloc[-2] if len(data) >= 2 else 0
+        price_change_5m = (current_price - data['close'].iloc[-6]) / data['close'].iloc[-6] if len(data) >= 6 else 0
+        price_change_10m = (current_price - data['close'].iloc[-11]) / data['close'].iloc[-11] if len(data) >= 11 else 0
         
         # Calculate ATR for stop-loss
         atr = self.indicators.atr(data)
@@ -97,8 +97,12 @@ class NewsTradingStrategy(BaseStrategy):
         # Check for news-driven price action
         # Strategy 1: Pre-news anticipation (price moving before news)
         if self.use_pre_news:
-            # Look for unusual price movement with volume spike
-            if volume_spike and abs(price_change_5m) > self.price_movement_threshold:
+            # Look for unusual price movement with volume spike OR just significant movement
+            # Lower threshold if volume is elevated (even if not 1.5x spike)
+            volume_elevated = volume_ratio >= 1.2 if avg_volume > 0 else False
+            movement_threshold = self.price_movement_threshold * 0.7 if volume_elevated else self.price_movement_threshold
+            
+            if (volume_spike or volume_elevated) and abs(price_change_5m) > movement_threshold:
                 if price_change_5m > 0 and rsi_current < 70:
                     # Bullish pre-news move
                     signal = Signal.BUY
@@ -113,7 +117,9 @@ class NewsTradingStrategy(BaseStrategy):
         # Strategy 2: Post-news reaction (strong price movement after news)
         if self.use_post_news and signal == Signal.HOLD:
             # Look for strong price movement with high volatility
-            if volatility > self.volatility_threshold and volume_spike:
+            # Lower volatility threshold slightly and allow elevated volume
+            effective_vol_threshold = self.volatility_threshold * 0.8
+            if volatility > effective_vol_threshold and (volume_spike or volume_elevated):
                 if price_change_1m > self.price_movement_threshold and rsi_current < 75:
                     # Strong bullish reaction
                     signal = Signal.BUY

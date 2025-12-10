@@ -47,7 +47,19 @@ class DayTradingStrategy(BaseStrategy):
         if current_time is None:
             current_time = datetime.now()
         
-        current_time_only = current_time.time()
+        # Handle both datetime objects and timestamps
+        if hasattr(current_time, 'time'):
+            current_time_only = current_time.time()
+        elif hasattr(current_time, 'hour'):
+            # It's already a time-like object
+            current_time_only = current_time
+        else:
+            # Try to extract from index or use current time
+            current_time = datetime.now()
+            current_time_only = current_time.time()
+        
+        # For crypto (24/7), always allow day trading
+        # For other markets, check trading hours
         return self.open_hour <= current_time_only.hour < self.close_hour
     
     def _get_intraday_data(self, data: pd.DataFrame) -> Dict:
@@ -55,13 +67,17 @@ class DayTradingStrategy(BaseStrategy):
         if len(data) < 2:
             return {'open': None, 'high': None, 'low': None, 'current': None, 'range': 0}
         
-        # Get today's open (first price of current session)
-        # For simplicity, use first available price
-        session_open = data['open'].iloc[0] if hasattr(data.index, 'date') else data['close'].iloc[0]
+        # For crypto/24h markets, use recent data (last 24 hours equivalent)
+        # Use last 24 bars if available, or all data if less
+        lookback = min(24, len(data))
+        recent_data = data.iloc[-lookback:]
         
-        # Get today's high and low
-        session_high = data['high'].max()
-        session_low = data['low'].min()
+        # Get session open (first price in lookback period)
+        session_open = recent_data['open'].iloc[0] if 'open' in recent_data.columns else recent_data['close'].iloc[0]
+        
+        # Get session high and low from recent period
+        session_high = recent_data['high'].max() if 'high' in recent_data.columns else recent_data['close'].max()
+        session_low = recent_data['low'].min() if 'low' in recent_data.columns else recent_data['close'].min()
         current_price = data['close'].iloc[-1]
         
         # Calculate intraday range
