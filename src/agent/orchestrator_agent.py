@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from .base_agent import BaseAgent
 from .analytical_agents import TechnicalAnalystAgent, SentimentAgent, FundamentalAgent
+from .quantitative_agent import QuantitativeAgent
 from .regime_switching_agent import RegimeSwitchingAgent
 from .risk_manager_agent import RiskManagerAgent
 from ..strategies.base_strategy import Signal
@@ -20,6 +21,7 @@ class OrchestratorAgent(BaseAgent):
                  technical_agent: Optional[TechnicalAnalystAgent] = None,
                  sentiment_agent: Optional[SentimentAgent] = None,
                  fundamental_agent: Optional[FundamentalAgent] = None,
+                 quantitative_agent: Optional[QuantitativeAgent] = None,
                  regime_agent: Optional[RegimeSwitchingAgent] = None,
                  risk_agent: Optional[RiskManagerAgent] = None,
                  drl_agent: Optional[DRLAgent] = None,
@@ -32,6 +34,7 @@ class OrchestratorAgent(BaseAgent):
             technical_agent: Technical analyst agent
             sentiment_agent: Sentiment agent
             fundamental_agent: Fundamental agent
+            quantitative_agent: Quantitative analysis agent
             regime_agent: Regime-switching agent
             risk_agent: Risk manager agent
             drl_agent: DRL agent for decision making (optional, falls back to weighted voting)
@@ -41,6 +44,7 @@ class OrchestratorAgent(BaseAgent):
         self.technical_agent = technical_agent
         self.sentiment_agent = sentiment_agent
         self.fundamental_agent = fundamental_agent
+        self.quantitative_agent = quantitative_agent
         self.regime_agent = regime_agent
         self.risk_agent = risk_agent
         self.drl_agent = drl_agent
@@ -161,6 +165,15 @@ class OrchestratorAgent(BaseAgent):
             print(f"  Fundamental: {fund_result['signal'].name}, confidence={fund_result.get('confidence', 0):.3f}")
         else:
             print("  Fundamental Agent: DISABLED")
+        
+        # Quantitative Agent
+        if self.quantitative_agent and self.quantitative_agent.is_enabled():
+            print("  Querying Quantitative Agent...")
+            quant_result = self.quantitative_agent.analyze(data, symbol)
+            agent_signals['quantitative'] = quant_result
+            print(f"  Quantitative: {quant_result['signal'].name}, confidence={quant_result.get('confidence', 0):.3f}")
+        else:
+            print("  Quantitative Agent: DISABLED")
         
         # Rule 4: DRL-Based Decision or Weighted Voting Fallback
         print("\n[Step 4] Making Final Decision...")
@@ -486,9 +499,10 @@ class OrchestratorAgent(BaseAgent):
         
         # Base weights (if not provided by regime agent)
         base_weights = {
-            'technical': 0.4,
-            'sentiment': 0.3,
-            'fundamental': 0.3
+            'technical': 0.35,
+            'sentiment': 0.25,
+            'fundamental': 0.25,
+            'quantitative': 0.15
         }
         
         weighted_score = 0.0

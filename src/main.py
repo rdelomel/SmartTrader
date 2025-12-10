@@ -53,6 +53,7 @@ try:
     from .agent.decision_engine import DecisionEngine  # Keep for backward compatibility
     from .agent.strategy_selector import StrategySelector
     from .agent.analytical_agents import TechnicalAnalystAgent, SentimentAgent, FundamentalAgent
+    from .agent.quantitative_agent import QuantitativeAgent
     from .agent.regime_switching_agent import RegimeSwitchingAgent
     from .agent.orchestrator_agent import OrchestratorAgent
     from .agent.risk_manager_agent import RiskManagerAgent
@@ -249,6 +250,10 @@ class TradingAgent:
                 config=self.trading_config.get('agents', {}).get('fundamental', {})
             )
             
+            self.quantitative_agent = QuantitativeAgent(
+                config=self.trading_config.get('agents', {}).get('quantitative', {})
+            )
+            
             # 2. Regime-Switching Agent
             self.regime_agent = RegimeSwitchingAgent(
                 config=self.trading_config.get('agents', {}).get('regime_switching', {})
@@ -304,6 +309,7 @@ class TradingAgent:
                 technical_agent=self.technical_agent,
                 sentiment_agent=self.sentiment_agent,
                 fundamental_agent=self.fundamental_agent,
+                quantitative_agent=self.quantitative_agent,
                 regime_agent=self.regime_agent,
                 risk_agent=self.risk_agent,
                 drl_agent=self.drl_agent,

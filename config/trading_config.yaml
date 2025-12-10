@@ -23,6 +23,14 @@ agents:
   fundamental:
     enabled: true
   
+  quantitative:
+    enabled: true
+    lookback_period: 100
+    min_confidence: 0.4
+    use_statistical_models: true
+    use_momentum_models: true
+    use_mean_reversion_models: true
+  
   regime_switching:
     enabled: true
     n_regimes: 4

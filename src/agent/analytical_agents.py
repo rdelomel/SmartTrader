@@ -9,6 +9,7 @@ import yfinance as yf
 from .base_agent import BaseAgent
 from ..strategies.base_strategy import Signal
 from ..indicators.technical import TechnicalIndicators
+from ..indicators.chart_patterns import ChartPatternRecognizer, PatternType
 from ..ai.models.sentiment_analyzer import SentimentAnalyzer
 from ..data.news_fetcher import NewsFetcher
 import os
@@ -33,6 +34,7 @@ class TechnicalAnalystAgent(BaseAgent):
         self.ml_model = ml_model
         self.lstm_model = lstm_model
         self.indicators = TechnicalIndicators()
+        self.pattern_recognizer = ChartPatternRecognizer()
         self.feature_engineer = None  # Will be set if needed
     
     def analyze(self, data: pd.DataFrame, symbol: str = None) -> Dict:
@@ -58,9 +60,50 @@ class TechnicalAnalystAgent(BaseAgent):
         
         print(f"\n=== TechnicalAnalyst analyzing {symbol if symbol else 'symbol'} ===")
         
+        # Enhanced Technical Analysis based on Investopedia principles:
+        # 1. Market discounts everything - price/volume reflect all information
+        # 2. Prices move in trends - identify and follow trends
+        # 3. History repeats itself - use chart patterns and historical data
+        
+        # Detect chart patterns (Investopedia: pattern recognition)
+        patterns = self.pattern_recognizer.detect_patterns(data)
+        pattern_signals = []
+        if patterns:
+            print(f"  📊 Chart Patterns Detected: {len(patterns)}")
+            for pattern in patterns[:3]:  # Top 3 patterns
+                pattern_type = pattern['type'].value if hasattr(pattern['type'], 'value') else str(pattern['type'])
+                direction = pattern['direction']
+                confidence = pattern.get('confidence', 0.5)
+                
+                signal = Signal.BUY if direction == 'bullish' else Signal.SELL
+                pattern_signals.append({
+                    'signal': signal,
+                    'confidence': confidence,
+                    'source': f'Pattern_{pattern_type}',
+                    'pattern_type': pattern_type,
+                    'target': pattern.get('target'),
+                    'stop_loss': pattern.get('stop_loss')
+                })
+                print(f"    {pattern_type}: {direction.upper()}, confidence={confidence:.2f}")
+        
+        # Find support/resistance levels (Investopedia: key price levels)
+        support_resistance = self.pattern_recognizer.find_support_resistance(data)
+        if support_resistance.get('support') or support_resistance.get('resistance'):
+            print(f"  📈 Support/Resistance:")
+            if support_resistance.get('support'):
+                print(f"    Support: ${support_resistance['support']:.2f} (strength: {support_resistance.get('support_strength', 0)})")
+            if support_resistance.get('resistance'):
+                print(f"    Resistance: ${support_resistance['resistance']:.2f} (strength: {support_resistance.get('resistance_strength', 0)})")
+        
         signals = []
         weights = []
         strategy_details = []
+        
+        # Add pattern signals with weight
+        pattern_weight = self.config.get('pattern_weight', 0.15)
+        for pattern_signal in pattern_signals:
+            signals.append(pattern_signal)
+            weights.append(pattern_weight)
         
         # Get signals from strategies
         for strategy in self.strategies:
@@ -157,15 +200,30 @@ class TechnicalAnalystAgent(BaseAgent):
         
         self._update_timestamp()
         
-        return {
+        # Include pattern and support/resistance info in result
+        result = {
             'signal': final_signal,
             'score': weighted_score,
             'confidence': min(weighted_confidence, 1.0),
             'source': self.name,
             'reason': f'Technical analysis: {len(signals)} signals, score={weighted_score:.2f}',
             'signals_count': len(signals),
-            'strategy_details': strategy_details
+            'strategy_details': strategy_details,
+            'patterns': [{'type': p['type'].value if hasattr(p['type'], 'value') else str(p['type']), 
+                         'direction': p['direction'], 
+                         'confidence': p.get('confidence', 0)} for p in patterns[:3]],
+            'support_resistance': support_resistance,
+            'stop_loss': None,
+            'take_profit': None
         }
+        
+        # Extract stop loss and take profit from strongest pattern if available
+        if patterns:
+            strongest_pattern = patterns[0]
+            result['stop_loss'] = strongest_pattern.get('stop_loss')
+            result['take_profit'] = strongest_pattern.get('target')
+        
+        return result
     
     def _get_ml_signal(self, data: pd.DataFrame) -> Optional[Dict]:
         """Get signal from ML model"""
@@ -449,55 +507,209 @@ class FundamentalAgent(BaseAgent):
             }
     
     def _analyze_stock_fundamentals(self, symbol: str) -> Dict:
-        """Analyze stock fundamentals"""
+        """
+        Enhanced stock fundamental analysis based on Investopedia principles
+        - Evaluates intrinsic value through financial metrics
+        - Analyzes financial statements, earnings, sales
+        - Compares to industry and market
+        """
         try:
             # Clean symbol (remove /USD etc)
             clean_symbol = symbol.split('/')[0] if '/' in symbol else symbol
             
-            # Use yfinance as fallback
+            # Use yfinance for comprehensive fundamental data
             ticker = yf.Ticker(clean_symbol)
             info = ticker.info
             
-            # Extract key metrics
+            # === VALUATION METRICS (Intrinsic Value Assessment) ===
             pe_ratio = info.get('trailingPE', None)
             forward_pe = info.get('forwardPE', None)
             peg_ratio = info.get('pegRatio', None)
-            debt_to_equity = info.get('debtToEquity', None)
-            return_on_equity = info.get('returnOnEquity', None)
+            price_to_book = info.get('priceToBook', None)
+            price_to_sales = info.get('priceToSalesTrailing12Months', None)
+            enterprise_value = info.get('enterpriseValue', None)
+            market_cap = info.get('marketCap', None)
+            
+            # === PROFITABILITY METRICS ===
             profit_margin = info.get('profitMargins', None)
+            operating_margin = info.get('operatingMargins', None)
+            return_on_equity = info.get('returnOnEquity', None)
+            return_on_assets = info.get('returnOnAssets', None)
+            gross_margin = info.get('grossMargins', None)
             
-            # Calculate fundamental score
+            # === GROWTH METRICS ===
+            revenue_growth = info.get('revenueGrowth', None)
+            earnings_growth = info.get('earningsGrowth', None)
+            earnings_quarterly_growth = info.get('earningsQuarterlyGrowth', None)
+            
+            # === FINANCIAL HEALTH METRICS ===
+            debt_to_equity = info.get('debtToEquity', None)
+            current_ratio = info.get('currentRatio', None)
+            quick_ratio = info.get('quickRatio', None)
+            total_cash = info.get('totalCash', None)
+            total_debt = info.get('totalDebt', None)
+            free_cashflow = info.get('freeCashflow', None)
+            
+            # === DIVIDEND METRICS ===
+            dividend_yield = info.get('dividendYield', None)
+            payout_ratio = info.get('payoutRatio', None)
+            
+            # Calculate comprehensive fundamental score
             score = 0.0
-            confidence = 0.3  # Lower confidence for fundamental analysis
+            confidence_factors = []
+            metrics_analyzed = 0
             
-            # P/E analysis
+            # === VALUATION ANALYSIS (40% weight) ===
+            valuation_score = 0.0
+            
+            # P/E Ratio Analysis (compare to market average ~20)
             if pe_ratio:
+                metrics_analyzed += 1
                 if pe_ratio < 15:
-                    score += 0.3  # Undervalued
-                elif pe_ratio > 25:
-                    score -= 0.2  # Overvalued
+                    valuation_score += 0.4  # Undervalued
+                elif pe_ratio < 20:
+                    valuation_score += 0.2  # Fairly valued
+                elif pe_ratio > 30:
+                    valuation_score -= 0.3  # Overvalued
+                confidence_factors.append(0.15)
             
-            # PEG ratio (better than P/E)
+            # Forward P/E (more predictive)
+            if forward_pe and pe_ratio:
+                metrics_analyzed += 1
+                if forward_pe < pe_ratio * 0.9:  # Earnings growing
+                    valuation_score += 0.2
+                confidence_factors.append(0.1)
+            
+            # PEG Ratio (growth-adjusted valuation)
             if peg_ratio:
+                metrics_analyzed += 1
                 if peg_ratio < 1.0:
-                    score += 0.4  # Good value
-                elif peg_ratio > 2.0:
-                    score -= 0.3
+                    valuation_score += 0.5  # Excellent value
+                elif peg_ratio < 1.5:
+                    valuation_score += 0.2
+                elif peg_ratio > 2.5:
+                    valuation_score -= 0.4
+                confidence_factors.append(0.2)
             
-            # Profitability
+            # Price-to-Book
+            if price_to_book:
+                metrics_analyzed += 1
+                if price_to_book < 1.5:
+                    valuation_score += 0.3  # Undervalued
+                elif price_to_book > 3.0:
+                    valuation_score -= 0.2
+                confidence_factors.append(0.1)
+            
+            # Price-to-Sales
+            if price_to_sales:
+                metrics_analyzed += 1
+                if price_to_sales < 2.0:
+                    valuation_score += 0.2
+                elif price_to_sales > 5.0:
+                    valuation_score -= 0.2
+                confidence_factors.append(0.1)
+            
+            score += valuation_score * 0.4  # 40% weight
+            
+            # === PROFITABILITY ANALYSIS (30% weight) ===
+            profitability_score = 0.0
+            
             if profit_margin:
-                if profit_margin > 0.15:
-                    score += 0.2
+                metrics_analyzed += 1
+                if profit_margin > 0.20:
+                    profitability_score += 0.4  # Excellent
+                elif profit_margin > 0.10:
+                    profitability_score += 0.2
                 elif profit_margin < 0:
-                    score -= 0.3
+                    profitability_score -= 0.5  # Losing money
+                confidence_factors.append(0.15)
             
-            # ROE
+            if operating_margin:
+                metrics_analyzed += 1
+                if operating_margin > 0.15:
+                    profitability_score += 0.3
+                confidence_factors.append(0.1)
+            
             if return_on_equity:
-                if return_on_equity > 0.15:
-                    score += 0.1
+                metrics_analyzed += 1
+                if return_on_equity > 0.20:
+                    profitability_score += 0.3  # Excellent ROE
+                elif return_on_equity > 0.15:
+                    profitability_score += 0.15
+                elif return_on_equity < 0.05:
+                    profitability_score -= 0.3
+                confidence_factors.append(0.15)
+            
+            if return_on_assets:
+                metrics_analyzed += 1
+                if return_on_assets > 0.10:
+                    profitability_score += 0.2
+                confidence_factors.append(0.1)
+            
+            score += profitability_score * 0.3  # 30% weight
+            
+            # === GROWTH ANALYSIS (20% weight) ===
+            growth_score = 0.0
+            
+            if revenue_growth:
+                metrics_analyzed += 1
+                if revenue_growth > 0.15:
+                    growth_score += 0.4  # Strong growth
+                elif revenue_growth > 0.05:
+                    growth_score += 0.2
+                elif revenue_growth < -0.10:
+                    growth_score -= 0.4  # Declining revenue
+                confidence_factors.append(0.15)
+            
+            if earnings_growth:
+                metrics_analyzed += 1
+                if earnings_growth > 0.20:
+                    growth_score += 0.4
+                elif earnings_growth > 0.10:
+                    growth_score += 0.2
+                elif earnings_growth < -0.10:
+                    growth_score -= 0.4
+                confidence_factors.append(0.15)
+            
+            score += growth_score * 0.2  # 20% weight
+            
+            # === FINANCIAL HEALTH ANALYSIS (10% weight) ===
+            health_score = 0.0
+            
+            if debt_to_equity:
+                metrics_analyzed += 1
+                if debt_to_equity < 0.5:
+                    health_score += 0.3  # Low debt
+                elif debt_to_equity > 2.0:
+                    health_score -= 0.3  # High debt
+                confidence_factors.append(0.1)
+            
+            if current_ratio:
+                metrics_analyzed += 1
+                if current_ratio > 2.0:
+                    health_score += 0.2  # Strong liquidity
+                elif current_ratio < 1.0:
+                    health_score -= 0.3  # Liquidity concerns
+                confidence_factors.append(0.1)
+            
+            if free_cashflow and free_cashflow > 0:
+                metrics_analyzed += 1
+                health_score += 0.2  # Positive cash flow
+                confidence_factors.append(0.1)
+            
+            score += health_score * 0.1  # 10% weight
             
             # Normalize score
             score = max(-1.0, min(1.0, score))
+            
+            # Calculate confidence based on metrics analyzed
+            base_confidence = 0.3
+            if metrics_analyzed >= 8:
+                confidence = min(0.7, base_confidence + (metrics_analyzed - 5) * 0.05)
+            elif metrics_analyzed >= 5:
+                confidence = min(0.5, base_confidence + (metrics_analyzed - 3) * 0.04)
+            else:
+                confidence = base_confidence
             
             # Determine signal (fundamental is more long-term)
             if score > 0.3:
@@ -514,13 +726,24 @@ class FundamentalAgent(BaseAgent):
                 'score': score,
                 'confidence': confidence,
                 'source': self.name,
-                'reason': f'Stock fundamentals: P/E={pe_ratio:.2f}, PEG={peg_ratio:.2f if peg_ratio else "N/A"}',
+                'reason': f'Fundamental analysis: {metrics_analyzed} metrics, score={score:.2f}',
                 'time_horizon': 'long_term',
                 'metrics': {
                     'pe_ratio': pe_ratio,
+                    'forward_pe': forward_pe,
                     'peg_ratio': peg_ratio,
-                    'profit_margin': profit_margin
-                }
+                    'price_to_book': price_to_book,
+                    'profit_margin': profit_margin,
+                    'roe': return_on_equity,
+                    'revenue_growth': revenue_growth,
+                    'earnings_growth': earnings_growth,
+                    'debt_to_equity': debt_to_equity,
+                    'metrics_count': metrics_analyzed
+                },
+                'valuation_score': valuation_score,
+                'profitability_score': profitability_score,
+                'growth_score': growth_score,
+                'health_score': health_score
             }
         
         except Exception as e:
