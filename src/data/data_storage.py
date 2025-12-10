@@ -1,6 +1,6 @@
 """Data storage module for historical data and trade records"""
 
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean
+from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
@@ -112,32 +112,61 @@ class DataStorage:
             
             print(f"Connecting to database: {safe_url}")
             
-            # For PostgreSQL, ensure we're using the right driver
+            # For PostgreSQL, use psycopg2 explicitly (more stable with SQLAlchemy 2.0)
             if database_url.startswith('postgresql://'):
-                # Try to use psycopg3 if available, otherwise psycopg2
-                try:
-                    import psycopg
-                    database_url = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
-                    print("Using psycopg (v3) driver")
-                except ImportError:
-                    try:
-                        import psycopg2
-                        database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://', 1)
-                        print("Using psycopg2 driver")
-                    except ImportError:
-                        print("Warning: No PostgreSQL driver found, using default")
+                # Explicitly use psycopg2 driver
+                database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://', 1)
+                print("Using psycopg2 driver for PostgreSQL")
             
             print("Creating database engine...")
+            # Use more conservative connection settings to avoid memory issues
             self.engine = create_engine(
                 database_url, 
                 echo=False, 
                 pool_pre_ping=True,  # Verify connections before using
                 pool_recycle=300,    # Recycle connections after 5 minutes
-                connect_args={"connect_timeout": 10}  # 10 second connection timeout
+                pool_size=5,         # Limit pool size
+                max_overflow=10,     # Limit overflow
+                connect_args={
+                    "connect_timeout": 10,
+                    "options": "-c statement_timeout=30000"  # 30 second statement timeout
+                }
             )
-            print("Database engine created, creating tables...")
-            Base.metadata.create_all(self.engine)
-            print("Tables created, creating session maker...")
+            print("Database engine created")
+            
+            # Test connection before creating tables
+            print("Testing database connection...")
+            with self.engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
+            print("Database connection test successful")
+            
+            print("Creating tables...")
+            # Create tables with explicit transaction handling to avoid memory issues
+            try:
+                # Use a connection with explicit transaction
+                with self.engine.begin() as conn:
+                    # Create all tables in a single transaction
+                    Base.metadata.create_all(conn, checkfirst=True)
+                print("Tables created successfully")
+            except Exception as table_error:
+                print(f"Error creating tables: {table_error}")
+                import traceback
+                traceback.print_exc()
+                # If batch creation fails, try creating tables individually
+                print("Attempting to create tables individually...")
+                for table_name, table in Base.metadata.tables.items():
+                    try:
+                        print(f"Creating table: {table_name}...")
+                        with self.engine.begin() as conn:
+                            table.create(conn, checkfirst=True)
+                        print(f"Table {table_name} created successfully")
+                    except Exception as e:
+                        print(f"Error creating table {table_name}: {e}")
+                        import traceback
+                        traceback.print_exc()
+            
+            print("Creating session maker...")
             self.Session = sessionmaker(bind=self.engine)
             print("Database initialized successfully")
         except Exception as e:
