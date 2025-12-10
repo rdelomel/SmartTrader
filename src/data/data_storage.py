@@ -484,4 +484,3 @@ class DataStorage:
             return None
         finally:
             session.close()
-
