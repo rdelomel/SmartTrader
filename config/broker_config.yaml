@@ -1,0 +1,31 @@
+# Broker Configuration
+# This file should be kept secure and not committed to version control
+# Actual credentials should be in .env file
+
+brokers:
+  oanda:
+    name: OANDA
+    type: forex
+    base_url: https://api-fxtrade.oanda.com
+    practice_url: https://api-fxpractice.oanda.com
+    rate_limit: 3000  # Requests per minute
+    supported_assets: [forex]
+    order_types: [market, limit, stop_loss, take_profit]
+    min_order_size: 0.01
+  
+  alpaca:
+    name: Alpaca
+    type: stocks_crypto
+    base_url: https://api.alpaca.markets
+    paper_url: https://paper-api.alpaca.markets
+    rate_limit: 200  # Requests per minute
+    supported_assets: [stocks, crypto]
+    order_types: [market, limit, stop_loss, take_profit]
+    min_order_size: 1
+
+# Default broker per asset class
+default_brokers:
+  crypto: alpaca  # Using Alpaca for crypto trading
+  forex: oanda
+  stocks: alpaca
+

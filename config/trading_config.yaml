@@ -1,0 +1,223 @@
+# Trading Configuration
+
+# Aggressive Trading Mode Configuration
+aggressive_mode:
+  enabled: true  # Set to true to enable aggressive DRL-based trading
+  target_weekly_return: 3.0  # Target weekly return percentage (3% per week)
+  max_drawdown: 4.5  # Maximum drawdown percentage
+  use_drl: true  # Use Deep Reinforcement Learning for decisions
+  volatility_scaling: true  # Use volatility-based position sizing
+  circuit_breakers: true  # Enable real-time circuit breakers
+
+# Multi-Agent Framework Configuration
+agents:
+  technical:
+    enabled: true
+    ml_weight: 0.3
+    lstm_weight: 0.15
+  
+  sentiment:
+    enabled: true
+    sentiment_threshold: 0.25  # Lowered from 0.3 for more responsive sentiment signals
+  
+  fundamental:
+    enabled: true
+  
+  regime_switching:
+    enabled: true
+    n_regimes: 4
+    use_hmm: true
+    lookback_period: 100
+  
+  risk_manager:
+    enabled: true
+    max_position_size_percent: 4.0
+    max_drawdown_percent: 4.5  # Aligned with aggressive_mode max_drawdown
+    min_liquidity_ratio: 0.1
+    max_slippage_bps: 10
+    veto_enabled: true
+    circuit_breaker:
+      max_daily_loss_percent: 1.0  # Tighter daily loss limit to protect 4.5% DD
+      max_hourly_loss_percent: 0.35  # Hourly loss cap for intraday containment
+      max_drawdown_percent: 4.5  # Max absolute drawdown (aligned with aggressive_mode)
+      cooling_period_hours: 4  # Hours to wait after trigger
+  
+  orchestrator:
+    enabled: true
+    min_confidence: 0.2  # Further lowered for more trading activity (was 0.3, originally 0.5)
+    consensus_threshold: 0.4  # Further lowered for more trading activity (was 0.5, originally 0.6)
+    veto_enabled: true
+    aggressive_mode: true  # Enable aggressive mode for lower thresholds
+    risk_reward_ratio: 2.0  # Risk/Reward ratio for take profit calculation (1:2 = minimum for profitability)
+    # Common ratios: 1:2 (minimum), 1:3 (sweet spot), 1:5+ (requires precise entries)
+    # Must match win rate: 50% win rate needs 1:2+, 40% needs 1:3+, 60% can work with 1:1.5
+
+# Risk Management Parameters
+risk:
+  max_drawdown_percent: 4.5  # Maximum drawdown before kill switch activates (aligned with aggressive_mode)
+  position_size_percent: 1.2  # Base percentage of capital to risk per trade
+  max_position_size_percent: 5.0  # Hard cap per position to respect 4.5% DD
+  stop_loss_atr_multiplier: 2.0  # Stop loss distance in ATR multiples
+  take_profit_atr_multiplier: 3.0  # Take profit distance in ATR multiples
+  trailing_stop_enabled: true
+  trailing_stop_atr_multiplier: 1.5
+  dynamic_scaling:
+    enabled: true  # Enable dynamic position sizing based on performance
+    performance_threshold_sharpe: 1.0  # Increase position size when Sharpe > this threshold
+    max_risk_per_trade: 2.0  # Cap risk per trade in favorable conditions
+    win_streak_bonus: 0.05  # Smaller compounding to avoid runaway sizing
+
+# Portfolio-level risk controls
+portfolio_risk:
+  enabled: true
+  max_exposure_percent: 20.0  # Portfolio gross exposure cap
+  max_correlation: 0.7       # Do not add if portfolio correlation exceeds this
+  max_sector_concentration: 0.5  # Limit concentration per sector/asset cluster
+  
+# Trading Hours (UTC)
+trading_hours:
+  forex:
+    enabled: true
+    start_hour: 0  # 24-hour format
+    end_hour: 24
+    days: [monday, tuesday, wednesday, thursday, friday]
+  
+  crypto:
+    enabled: true
+    start_hour: 0
+    end_hour: 24
+    days: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]  # 24/7
+  
+  commodities:
+    enabled: true
+    start_hour: 0  # Precious metals trade similar to forex (24/5)
+    end_hour: 24
+    days: [monday, tuesday, wednesday, thursday, friday]
+  
+  stocks:
+    enabled: true
+    start_hour: 13  # 9:30 AM EST = 13:30 UTC
+    end_hour: 20  # 4:00 PM EST = 20:00 UTC
+    days: [monday, tuesday, wednesday, thursday, friday]
+
+# Asset Classes to Trade
+assets:
+  crypto:
+    enabled: true
+    symbols:
+      - BTC/USD
+      - ETH/USD
+      - SOL/USD
+    broker: alpaca  # Using Alpaca for crypto trading
+  
+  forex:
+    enabled: true
+    symbols:
+      - EUR/USD
+      - GBP/USD
+      - USD/JPY
+    broker: oanda
+  
+  commodities:
+    enabled: true
+    symbols:
+      - XAU/USD  # Gold
+      - XAG/USD  # Silver
+    broker: oanda  # OANDA supports precious metals
+  
+  stocks:
+    enabled: true
+    dynamic_discovery: true  # Enable news-based stock discovery
+    max_concurrent_stocks: 15  # Maximum stocks to trade simultaneously
+    min_sentiment_score: 0.5  # Minimum sentiment score for significant news
+    discovery_refresh_hours: 1  # How often to refresh discovered stocks
+    symbols: []  # Empty list - stocks will be discovered from news
+    broker: alpaca
+
+# Timeframes
+timeframes:
+  primary: 1h  # Primary timeframe for trading decisions
+  analysis: [15m, 1h, 4h, 1d]  # Multiple timeframes for analysis
+
+# Strategy Configuration
+strategies:
+  trend_following:
+    enabled: true
+    weight: 0.35  # Increased from 0.3 for more influence
+    fast_ma_period: 20
+    slow_ma_period: 50
+  
+  mean_reversion:
+    enabled: true
+    weight: 0.25  # Increased from 0.2 for more influence
+    lookback_period: 14
+    z_score_threshold: 1.5  # Lowered from 2.0 to match code changes (signals more frequently)
+  
+  ml_model:
+    enabled: true
+    weight: 0.3
+    model_type: xgboost
+    retrain_frequency_days: 7
+  
+  lstm_model:
+    enabled: true
+    weight: 0.15
+    sequence_length: 60
+    retrain_frequency_days: 14
+  
+  sentiment:
+    enabled: true
+    weight: 0.05
+    news_sources: [rss, twitter]
+    update_frequency_minutes: 15
+  
+  breakout:
+    enabled: false
+    weight: 0.15
+    lookback_period: 20
+    breakout_threshold: 0.005  # 0.5%
+    volume_threshold: 1.5
+    use_atr: true
+  
+  momentum:
+    enabled: false
+    weight: 0.15
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    momentum_period: 10
+    min_momentum: 0.02  # 2%
+  
+  volatility:
+    enabled: false
+    weight: 0.1
+    bb_period: 20
+    bb_std: 2
+    atr_period: 14
+    low_volatility_threshold: 0.5
+    high_volatility_threshold: 2.0
+    volatility_expansion_factor: 1.5
+
+# Model Performance Monitoring
+model_monitoring:
+  performance_window_days: 30
+  min_sharpe_ratio: 0.5
+  min_accuracy: 0.52  # Minimum 52% accuracy to continue trading
+  retrain_threshold: 0.48  # Retrain if accuracy drops below this
+
+# Anomaly Detection
+anomaly_detection:
+  enabled: true
+  contamination: 0.1  # Expected proportion of anomalies
+  reduce_position_on_anomaly: true
+  position_reduction_factor: 0.5  # Reduce position size by this factor
+
+# Backtesting
+backtesting:
+  initial_capital: 10000.0
+  commission_rate: 0.001  # 0.1% commission
+  slippage_bps: 5  # 5 basis points slippage
+

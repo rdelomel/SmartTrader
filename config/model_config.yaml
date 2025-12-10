@@ -1,0 +1,163 @@
+# AI Model Configuration
+
+# Deep Reinforcement Learning (DRL) Configuration
+drl:
+  enabled: true  # Set to true to enable DRL-based trading
+  algorithm: ppo  # Options: 'ppo' or 'a2c'
+  state_dim: 20  # Dimension of state space
+  action_dim: 1  # Dimension of action space (continuous)
+  learning_rate: 0.0005  # Slightly higher for faster convergence
+  use_stable_baselines: true  # Use stable-baselines3 library
+  reward_alpha: 2.0  # Coefficient for PNL in reward function (increased from 1.0)
+  reward_beta: 8.0   # Coefficient for drawdown penalty (slightly reduced from 10.0, still strict)
+  reward_gamma: 0.05 # Coefficient for transaction costs (reduced from 0.1 to encourage more trades)
+  reward_weekly_bonus: 5.0  # Bonus for achieving weekly targets
+  reward_sharpe_bonus: 3.0  # Bonus for high Sharpe ratio
+  reward_momentum_bonus: 2.0  # Bonus for consecutive profitable periods
+  total_timesteps: 200000  # Total training timesteps (increased from 100000)
+  batch_size: 256  # Larger batches for stability
+  n_steps: 2048  # More steps per update
+  curriculum_learning: true  # Enable curriculum learning (start conservative, increase difficulty)
+  state_dim: 25  # Increased state dimension to accommodate new features (from 20)
+
+# Walk-Forward Optimization
+walk_forward:
+  enabled: true  # Set to true to enable WFO
+  in_sample_days: 60  # Days for in-sample training
+  out_of_sample_days: 30  # Days for out-of-sample testing
+  step_days: 30  # Days to step forward each iteration
+  min_performance_threshold: 0.5  # Minimum Sharpe ratio to retrain
+  auto_retrain: true  # Automatically retrain when performance degrades
+
+# XGBoost Model
+xgboost:
+  n_estimators: 100
+  max_depth: 6
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_weight: 3
+  objective: binary:logistic  # For classification (up/down prediction)
+  eval_metric: logloss
+  early_stopping_rounds: 10
+
+# LSTM Model
+lstm:
+  sequence_length: 60  # Number of time steps to look back
+  features: 20  # Number of features per time step
+  lstm_units: [64, 32]  # LSTM layers with units
+  dropout_rate: 0.2
+  dense_units: [16, 1]  # Dense layers before output
+  activation: tanh
+  optimizer: adam
+  learning_rate: 0.001
+  batch_size: 32
+  epochs: 50
+  validation_split: 0.2
+
+# Sentiment Analysis
+sentiment:
+  provider: openrouter  # Options: openrouter, openai, local_llm
+  model: openai/gpt-3.5-turbo  # For OpenRouter (can use any model: openai/gpt-4, anthropic/claude-3, etc.)
+  # model: gpt-3.5-turbo  # For direct OpenAI API
+  # model: llama-2-7b  # For local LLM
+  max_tokens: 150
+  temperature: 0.3
+  news_sources:
+    - newsapi  # NewsAPI (recommended - requires NEWSAPI_API_KEY)
+    - cryptocompare  # CryptoCompare (free, no key needed for crypto)
+    - alphavantage  # Alpha Vantage (optional - requires ALPHA_VANTAGE_API_KEY)
+    - rss  # RSS feeds (fallback)
+  # News source configuration
+  newsapi_enabled: true  # Enable NewsAPI (requires NEWSAPI_API_KEY in .env)
+  alphavantage_enabled: false  # Enable Alpha Vantage news (requires ALPHA_VANTAGE_API_KEY)
+  cryptocompare_enabled: true  # Enable CryptoCompare (free, no key needed)
+  update_frequency_minutes: 15
+  sentiment_threshold: 0.3  # Minimum absolute sentiment to influence trading
+  # Enhanced RSS feeds with crypto-specific sources
+  rss_feeds:
+    # General financial news
+    - https://feeds.finance.yahoo.com/rss/2.0/headline
+    - https://www.cnbc.com/id/100003114/device/rss/rss.html
+    - https://feeds.reuters.com/reuters/businessNews
+    - https://rss.cnn.com/rss/money_latest.rss
+    # Crypto-specific RSS feeds (more reliable)
+    - https://www.coindesk.com/arc/outboundfeeds/rss/
+    - https://cointelegraph.com/rss
+    - https://cryptoslate.com/feed/
+    - https://www.coinjournal.net/feed/
+    # Forex news
+    - https://www.forexfactory.com/rss.php
+  max_articles_per_feed: 10
+  keywords:
+    - bitcoin
+    - btc
+    - ethereum
+    - eth
+    - crypto
+    - cryptocurrency
+    - forex
+    - eur
+    - gbp
+    - jpy
+    - usd
+    - dollar
+    - euro
+    - pound
+    - stock
+    - market
+    - trading
+    - invest
+    - finance
+    - economy
+
+# Fundamental Data Sources
+fundamental:
+  alpha_vantage_enabled: false  # Set to true and add ALPHA_VANTAGE_API_KEY to .env
+  fred_enabled: false  # Set to true and add FRED_API_KEY to .env
+  fallback_to_yfinance: true
+
+# Feature Engineering
+features:
+  technical_indicators:
+    - rsi
+    - macd
+    - bollinger_bands
+    - atr
+    - moving_averages
+    - stochastic
+    - adx
+  
+  time_features:
+    - hour_of_day
+    - day_of_week
+    - month
+    - is_weekend
+  
+  lag_features:
+    - price_lags: [1, 2, 3, 5, 10]
+    - volume_lags: [1, 2, 3, 5]
+  
+  volatility_features:
+    - rolling_std
+    - rolling_high_low_range
+    - price_change_percent
+
+# Model Training
+training:
+  train_test_split: 0.8
+  validation_split: 0.1
+  min_training_samples: 1000
+  retrain_frequency_days: 7
+  performance_window_days: 30
+  min_improvement_threshold: 0.02  # Minimum improvement to adopt new model
+
+# Anomaly Detection
+anomaly_detection:
+  model: isolation_forest
+  contamination: 0.1
+  n_estimators: 100
+  max_samples: 256
+  random_state: 42
+  features: [price_change, volume_change, volatility]
+

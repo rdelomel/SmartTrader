@@ -1,0 +1,22 @@
+# Railway deployment configuration for SmartTrader
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python src/main.py"
+healthcheckPath = "/"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Environment variables (set these in Railway dashboard)
+# OANDA_API_KEY
+# OANDA_ACCOUNT_ID
+# ALPACA_API_KEY
+# ALPACA_API_SECRET
+# ALPACA_BASE_URL
+# OPENROUTER_API_KEY
+# TRADING_MODE=paper
+# DATABASE_URL
+
