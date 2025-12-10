@@ -86,6 +86,9 @@ class DataStorage:
         Args:
             database_url: SQLAlchemy database URL. Defaults to SQLite if not provided.
         """
+        # Initialize tables_created flag for lazy table creation
+        self._tables_created = False
+        
         if database_url is None:
             database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/trading.db')
         
@@ -133,33 +136,23 @@ class DataStorage:
                 }
             )
             print("Database engine created")
-            # Note: pool_pre_ping=True will automatically test connections when needed
-            # No need for explicit connection test here - it may cause memory issues
             
-            print("Creating tables...")
-            # Create tables with explicit transaction handling to avoid memory issues
+            # CRITICAL: Test connection BEFORE table creation to fail fast if database is unreachable
+            print("Testing database connection...")
             try:
-                # Use a connection with explicit transaction
-                with self.engine.begin() as conn:
-                    # Create all tables in a single transaction
-                    Base.metadata.create_all(conn, checkfirst=True)
-                print("Tables created successfully")
-            except Exception as table_error:
-                print(f"Error creating tables: {table_error}")
+                # Simple connection test - just verify we can establish a connection
+                conn = self.engine.connect()
+                conn.close()
+                print("Database connection test successful")
+            except Exception as conn_error:
+                print(f"FATAL: Cannot connect to database: {conn_error}")
                 import traceback
                 traceback.print_exc()
-                # If batch creation fails, try creating tables individually
-                print("Attempting to create tables individually...")
-                for table_name, table in Base.metadata.tables.items():
-                    try:
-                        print(f"Creating table: {table_name}...")
-                        with self.engine.begin() as conn:
-                            table.create(conn, checkfirst=True)
-                        print(f"Table {table_name} created successfully")
-                    except Exception as e:
-                        print(f"Error creating table {table_name}: {e}")
-                        import traceback
-                        traceback.print_exc()
+                raise ConnectionError(f"Database connection failed: {conn_error}") from conn_error
+            
+            # DEFER table creation to avoid memory corruption issues during initialization
+            # Tables will be created lazily on first use (see _ensure_tables_created method)
+            print("Skipping table creation during initialization (will be created on first use)")
             
             print("Creating session maker...")
             self.Session = sessionmaker(bind=self.engine)
@@ -170,8 +163,37 @@ class DataStorage:
             traceback.print_exc()
             raise
     
+    def _ensure_tables_created(self):
+        """Ensure database tables exist (lazy creation to avoid startup crashes)"""
+        if self._tables_created:
+            return
+        
+        print("Creating database tables (lazy initialization)...")
+        try:
+            # Use engine directly instead of connection to avoid memory issues
+            # This is simpler and less likely to cause C-level memory corruption
+            Base.metadata.create_all(self.engine, checkfirst=True)
+            self._tables_created = True
+            print("Database tables created successfully")
+        except Exception as table_error:
+            # Check if this is actually a connection error
+            error_str = str(table_error).lower()
+            if any(keyword in error_str for keyword in ['connection', 'connect', 'network', 'timeout', 'refused']):
+                print(f"FATAL: Connection error during table creation: {table_error}")
+                import traceback
+                traceback.print_exc()
+                raise ConnectionError(f"Database connection failed during table creation: {table_error}") from table_error
+            
+            # For other errors, log but don't fail - tables might already exist
+            print(f"Warning: Error creating tables (may already exist): {table_error}")
+            import traceback
+            traceback.print_exc()
+            # Mark as created anyway to avoid repeated attempts
+            self._tables_created = True
+    
     def get_session(self) -> Session:
         """Get database session"""
+        self._ensure_tables_created()  # Ensure tables exist before returning session
         return self.Session()
     
     def store_ohlcv_data(self, symbol: str, timeframe: str, data: List[Dict]) -> int:
