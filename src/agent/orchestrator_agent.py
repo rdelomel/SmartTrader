@@ -7,6 +7,7 @@ import numpy as np
 from .base_agent import BaseAgent
 from .analytical_agents import TechnicalAnalystAgent, SentimentAgent, FundamentalAgent
 from .quantitative_agent import QuantitativeAgent
+from .pattern_forecaster_agent import PatternForecasterAgent
 from .regime_switching_agent import RegimeSwitchingAgent
 from .risk_manager_agent import RiskManagerAgent
 from ..strategies.base_strategy import Signal
@@ -22,6 +23,7 @@ class OrchestratorAgent(BaseAgent):
                  sentiment_agent: Optional[SentimentAgent] = None,
                  fundamental_agent: Optional[FundamentalAgent] = None,
                  quantitative_agent: Optional[QuantitativeAgent] = None,
+                 pattern_forecaster_agent: Optional[PatternForecasterAgent] = None,
                  regime_agent: Optional[RegimeSwitchingAgent] = None,
                  risk_agent: Optional[RiskManagerAgent] = None,
                  drl_agent: Optional[DRLAgent] = None,
@@ -35,6 +37,7 @@ class OrchestratorAgent(BaseAgent):
             sentiment_agent: Sentiment agent
             fundamental_agent: Fundamental agent
             quantitative_agent: Quantitative analysis agent
+            pattern_forecaster_agent: Pattern forecaster agent (historical pattern matching)
             regime_agent: Regime-switching agent
             risk_agent: Risk manager agent
             drl_agent: DRL agent for decision making (optional, falls back to weighted voting)
@@ -45,6 +48,7 @@ class OrchestratorAgent(BaseAgent):
         self.sentiment_agent = sentiment_agent
         self.fundamental_agent = fundamental_agent
         self.quantitative_agent = quantitative_agent
+        self.pattern_forecaster_agent = pattern_forecaster_agent
         self.regime_agent = regime_agent
         self.risk_agent = risk_agent
         self.drl_agent = drl_agent
@@ -174,6 +178,20 @@ class OrchestratorAgent(BaseAgent):
             print(f"  Quantitative: {quant_result['signal'].name}, confidence={quant_result.get('confidence', 0):.3f}")
         else:
             print("  Quantitative Agent: DISABLED")
+        
+        # Pattern Forecaster Agent (Historical Pattern Matching)
+        if self.pattern_forecaster_agent and self.pattern_forecaster_agent.is_enabled():
+            print("  Querying Pattern Forecaster Agent...")
+            try:
+                pattern_result = self.pattern_forecaster_agent.analyze(data, symbol)
+                agent_signals['pattern_forecaster'] = pattern_result
+                print(f"  Pattern Forecaster: {pattern_result['signal'].name}, confidence={pattern_result.get('confidence', 0):.3f}")
+                if pattern_result.get('matches_found'):
+                    print(f"    Matches Found: {pattern_result['matches_found']}, Forecast: {pattern_result.get('forecast_change_pct', 0):.2f}%")
+            except Exception as e:
+                print(f"  Pattern Forecaster Error: {e}")
+        else:
+            print("  Pattern Forecaster Agent: DISABLED")
         
         # Rule 4: DRL-Based Decision or Weighted Voting Fallback
         print("\n[Step 4] Making Final Decision...")
@@ -499,10 +517,11 @@ class OrchestratorAgent(BaseAgent):
         
         # Base weights (if not provided by regime agent)
         base_weights = {
-            'technical': 0.35,
-            'sentiment': 0.25,
-            'fundamental': 0.25,
-            'quantitative': 0.15
+            'technical': 0.30,
+            'sentiment': 0.20,
+            'fundamental': 0.20,
+            'quantitative': 0.15,
+            'pattern_forecaster': 0.15
         }
         
         weighted_score = 0.0

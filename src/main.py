@@ -54,6 +54,7 @@ try:
     from .agent.strategy_selector import StrategySelector
     from .agent.analytical_agents import TechnicalAnalystAgent, SentimentAgent, FundamentalAgent
     from .agent.quantitative_agent import QuantitativeAgent
+    from .agent.pattern_forecaster_agent import PatternForecasterAgent
     from .agent.regime_switching_agent import RegimeSwitchingAgent
     from .agent.orchestrator_agent import OrchestratorAgent
     from .agent.risk_manager_agent import RiskManagerAgent
@@ -252,6 +253,11 @@ class TradingAgent:
             
             self.quantitative_agent = QuantitativeAgent(
                 config=self.trading_config.get('agents', {}).get('quantitative', {})
+            )
+            
+            self.pattern_forecaster_agent = PatternForecasterAgent(
+                config=self.trading_config.get('agents', {}).get('pattern_forecaster', {}),
+                storage=self.storage
             )
             
             # 2. Regime-Switching Agent

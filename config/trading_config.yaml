@@ -31,6 +31,15 @@ agents:
     use_momentum_models: true
     use_mean_reversion_models: true
   
+  pattern_forecaster:
+    enabled: true
+    pattern_length: 20  # Number of bars in a pattern
+    lookahead_periods: 10  # Periods to forecast ahead
+    min_matches: 3  # Minimum similar patterns required
+    similarity_threshold: 0.7  # Minimum similarity score (0-1)
+    correlation_threshold: 0.6  # Minimum correlation coefficient
+    historical_lookback_days: 365  # Days of history to search
+  
   regime_switching:
     enabled: true
     n_regimes: 4
