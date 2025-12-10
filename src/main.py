@@ -1348,6 +1348,29 @@ class TradingAgent:
                 stored_id = self.storage.store_trade(trade_data)
                 if stored_id:
                     print(f"  ✅ Trade stored in database with ID: {stored_id}")
+                    if stop_loss:
+                        print(f"  📊 Stop Loss: ${stop_loss:.2f} ({abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
+                    else:
+                        print(f"  ⚠️  WARNING: Stop Loss is NULL - this is a critical issue!")
+                    if take_profit:
+                        risk = abs(entry_price - stop_loss) if stop_loss else 0
+                        reward = abs(take_profit - entry_price) if take_profit else 0
+                        rr_ratio = reward / risk if risk > 0 else 0
+                        print(f"  📊 Take Profit: ${take_profit:.2f} (Risk/Reward: 1:{rr_ratio:.2f})")
+                    else:
+                        print(f"  ⚠️  WARNING: Take Profit is NULL")
+                    
+                    # Verify storage
+                    try:
+                        stored_trade = self.storage.get_open_trades(symbol=symbol)
+                        stored_trade = next((t for t in stored_trade if t.get('trade_id') == order_id), None)
+                        if stored_trade:
+                            if stored_trade.get('stop_loss') != stop_loss:
+                                print(f"  ❌ CRITICAL: Stop loss mismatch! Stored: {stored_trade.get('stop_loss')}, Expected: {stop_loss}")
+                            if stored_trade.get('take_profit') != take_profit:
+                                print(f"  ❌ CRITICAL: Take profit mismatch! Stored: {stored_trade.get('take_profit')}, Expected: {take_profit}")
+                    except Exception as verify_error:
+                        print(f"  ⚠️  Could not verify storage: {verify_error}")
                 
                 trade_log = {
                     'symbol': symbol,
@@ -1570,6 +1593,39 @@ class TradingAgent:
                             take_profit = None
                     else:
                         take_profit = None
+                    
+                    # EMERGENCY FIX: Set default stop loss for trades without one
+                    # This prevents unlimited losses on existing trades
+                    if not stop_loss:
+                        # Use 2% stop loss as emergency measure
+                        if side == 'buy':
+                            stop_loss = entry_price * 0.98  # 2% stop loss
+                        else:  # sell
+                            stop_loss = entry_price * 1.02  # 2% stop loss for shorts
+                        
+                        # Update database with emergency stop loss
+                        try:
+                            self.storage.update_trade(trade_id, {'stop_loss': stop_loss})
+                            print(f"  ⚠️  EMERGENCY: Set default stop loss for {symbol}: ${stop_loss:.2f} (2% default)")
+                        except Exception as e:
+                            print(f"  ❌ Error setting emergency stop loss: {e}")
+                    
+                    # EMERGENCY FIX: Set default take profit if missing (1:2 risk/reward)
+                    if not take_profit and stop_loss:
+                        risk = abs(entry_price - stop_loss)
+                        if risk > 0:
+                            reward = risk * 2.0  # 1:2 risk/reward
+                            if side == 'buy':
+                                take_profit = entry_price + reward
+                            else:  # sell
+                                take_profit = entry_price - reward
+                            
+                            # Update database with emergency take profit
+                            try:
+                                self.storage.update_trade(trade_id, {'take_profit': take_profit})
+                                print(f"  ⚠️  EMERGENCY: Set default take profit for {symbol}: ${take_profit:.2f} (1:2 R/R)")
+                            except Exception as e:
+                                print(f"  ❌ Error setting emergency take profit: {e}")
                     
                     # Get current price - use appropriate broker for symbol type
                     current_price = entry_price  # Default fallback

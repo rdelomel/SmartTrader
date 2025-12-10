@@ -206,12 +206,30 @@ class OrchestratorAgent(BaseAgent):
             entry_price = data['close'].iloc[-1]
             stop_loss = agent_signals.get('technical', {}).get('stop_loss')
             if not stop_loss:
-                # Default stop loss
+                # Default stop loss - ensure it's always set
                 from ..indicators.technical import TechnicalIndicators
                 indicators = TechnicalIndicators()
                 atr = indicators.atr(data)
                 atr_value = atr.iloc[-1] if not atr.empty else entry_price * 0.02
-                stop_loss = entry_price - (atr_value * 2) if final_signal['signal'] == Signal.BUY else entry_price + (atr_value * 2)
+                
+                # Ensure ATR value is reasonable (at least 0.5% of price)
+                min_stop_distance = entry_price * 0.005  # 0.5% minimum
+                atr_value = max(atr_value, min_stop_distance)
+                
+                stop_distance = atr_value * 2.0  # 2x ATR
+                
+                if final_signal['signal'] == Signal.BUY:
+                    stop_loss = entry_price - stop_distance
+                else:  # SELL
+                    stop_loss = entry_price + stop_distance
+                
+                # Ensure stop loss is valid (not negative for buy, reasonable for sell)
+                if final_signal['signal'] == Signal.BUY:
+                    stop_loss = max(stop_loss, entry_price * 0.95)  # Max 5% loss
+                else:
+                    stop_loss = min(stop_loss, entry_price * 1.05)  # Max 5% loss for shorts
+                
+                print(f"  ✅ Calculated default stop loss: ${stop_loss:.2f} (ATR-based, {abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
             
             # Calculate take profit if not provided by technical agent
             take_profit = agent_signals.get('technical', {}).get('take_profit')
