@@ -31,8 +31,9 @@ ENV TF_ENABLE_ONEDNN_OPTS=0
 # Expose dashboard port
 EXPOSE 8000
 
-# Health check (uses internal port 8000, Railway maps PORT env var to this)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Health check - Railway maps PORT env var to container's port 8000
+# Increased start period to allow app to fully initialize (ML models take time to load)
+HEALTHCHECK --interval=60s --timeout=30s --start-period=180s --retries=3 \
   CMD curl -f http://localhost:8000/ || exit 1
 
 # Run the application

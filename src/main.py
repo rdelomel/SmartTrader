@@ -2467,8 +2467,26 @@ class TradingAgent:
 
 def main():
     """Main entry point"""
-    agent = TradingAgent()
-    agent.run()
+    try:
+        print("=" * 60)
+        print("Starting SmartTrader Trading Agent...")
+        print("=" * 60)
+        agent = TradingAgent()
+        print("Trading agent initialized successfully")
+        agent.run()
+    except KeyboardInterrupt:
+        print("\nShutting down trading agent...")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n{'=' * 60}")
+        print(f"FATAL ERROR: Failed to start trading agent")
+        print(f"{'=' * 60}")
+        print(f"Error: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        print(f"{'=' * 60}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
