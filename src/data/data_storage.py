@@ -79,6 +79,21 @@ class ModelPrediction(Base):
 
 class DataStorage:
     """Data storage manager for trading data"""
+    
+    @staticmethod
+    def _ensure_trade_id_string(trade_id) -> Optional[str]:
+        """
+        Ensure trade_id is a string (not integer)
+        
+        Args:
+            trade_id: Trade ID (can be string, int, or None)
+        
+        Returns:
+            String trade_id or None
+        """
+        if trade_id is None:
+            return None
+        return str(trade_id)
 
     # Class-level flag and lock to guard lazy table creation from concurrent access
     _tables_created = False
@@ -335,13 +350,15 @@ class DataStorage:
             trade_id = trade_data.get('trade_id', f"trade_{datetime.now().timestamp()}")
             
             # Check if trade already exists
-            existing_trade = session.query(Trade).filter_by(trade_id=trade_id).first()
+            # Ensure trade_id is a string
+            trade_id_str = self._ensure_trade_id_string(trade_id) or f"trade_{datetime.now().timestamp()}"
+            existing_trade = session.query(Trade).filter_by(trade_id=trade_id_str).first()
             if existing_trade:
                 # Trade already exists, return existing ID
                 return existing_trade.id
             
             trade = Trade(
-                trade_id=trade_id,
+                trade_id=trade_id_str,
                 symbol=trade_data['symbol'],
                 side=trade_data['side'],
                 quantity=trade_data['quantity'],
@@ -371,7 +388,7 @@ class DataStorage:
         Update trade record
         
         Args:
-            trade_id: Trade ID to update
+            trade_id: Trade ID to update (will be converted to string)
             update_data: Dictionary with fields to update
         
         Returns:
@@ -380,7 +397,12 @@ class DataStorage:
         session = self.get_session()
         
         try:
-            trade = session.query(Trade).filter_by(trade_id=trade_id).first()
+            # Ensure trade_id is a string (not integer)
+            trade_id_str = self._ensure_trade_id_string(trade_id)
+            if not trade_id_str:
+                return False
+            
+            trade = session.query(Trade).filter_by(trade_id=trade_id_str).first()
             if trade:
                 for key, value in update_data.items():
                     if hasattr(trade, key):
@@ -400,7 +422,7 @@ class DataStorage:
         Delete a trade record (for phantom positions that don't exist in broker)
         
         Args:
-            trade_id: Trade ID to delete
+            trade_id: Trade ID to delete (will be converted to string)
         
         Returns:
             True if successful, False otherwise
@@ -408,7 +430,12 @@ class DataStorage:
         session = self.get_session()
         
         try:
-            trade = session.query(Trade).filter_by(trade_id=trade_id).first()
+            # Ensure trade_id is a string (not integer)
+            trade_id_str = self._ensure_trade_id_string(trade_id)
+            if not trade_id_str:
+                return False
+            
+            trade = session.query(Trade).filter_by(trade_id=trade_id_str).first()
             if trade:
                 session.delete(trade)
                 session.commit()
