@@ -990,7 +990,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
             // WebSocket for real-time dashboard updates
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsHost = window.location.host;
-            const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
+            const ws = new WebSocket(`${{wsProtocol}}//${{wsHost}}/ws`);
             ws.onmessage = function(event) {{
                 const data = JSON.parse(event.data);
                 updateDashboard(data);
