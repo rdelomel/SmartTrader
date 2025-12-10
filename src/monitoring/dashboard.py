@@ -24,6 +24,9 @@ def _serialize_datetime(obj):
 def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[float] = None) -> FastAPI:
     """Create FastAPI dashboard application"""
     app = FastAPI(title="SmartTrader Dashboard")
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
     
     # Store dashboard data
     dashboard_data = {
