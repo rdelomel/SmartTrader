@@ -144,12 +144,13 @@ class DataStorage:
             )
             print("Database engine created")
             
-            # DEFER table creation (and explicit connection tests) to avoid memory corruption issues during initialization.
-            # Tables will be created lazily on first use (see _ensure_tables_created method).
-            print("Skipping table creation during initialization (will be created on first use)")
-            
             print("Creating session maker...")
             self.Session = sessionmaker(bind=self.engine)
+            
+            # Create tables immediately to ensure they exist
+            print("Creating database tables...")
+            self.create_tables()
+            
             print("Database initialized successfully")
         except Exception as e:
             print(f"Error initializing database: {e}")
@@ -157,8 +158,8 @@ class DataStorage:
             traceback.print_exc()
             raise
     
-    def _ensure_tables_created(self):
-        """Ensure database tables exist (lazy creation to avoid startup crashes)"""
+    def create_tables(self):
+        """Explicitly create database tables"""
         if DataStorage._tables_created:
             return
 
@@ -167,12 +168,25 @@ class DataStorage:
             if DataStorage._tables_created:
                 return
 
-            print("Creating database tables (lazy initialization)...")
+            print("Creating database tables...")
             try:
                 # Use engine directly instead of connection to avoid memory issues
                 Base.metadata.create_all(self.engine, checkfirst=True)
                 DataStorage._tables_created = True
-                print("Database tables created successfully")
+                
+                # Verify tables were created by checking if they exist
+                from sqlalchemy import inspect
+                inspector = inspect(self.engine)
+                existing_tables = inspector.get_table_names()
+                expected_tables = ['trades', 'ohlcv_data', 'model_predictions']
+                
+                missing_tables = [t for t in expected_tables if t not in existing_tables]
+                if missing_tables:
+                    print(f"WARNING: Some tables may not have been created: {missing_tables}")
+                    print(f"Existing tables: {existing_tables}")
+                else:
+                    print(f"Database tables created successfully: {existing_tables}")
+                    
             except Exception as table_error:
                 # Check if this is actually a connection error
                 error_str = str(table_error).lower()
@@ -186,8 +200,25 @@ class DataStorage:
                 print(f"Warning: Error creating tables (may already exist): {table_error}")
                 import traceback
                 traceback.print_exc()
-                # Mark as created anyway to avoid repeated attempts
-                DataStorage._tables_created = True
+                # Don't mark as created if there was an error - allow retry
+                # Only mark as created if we can verify tables exist
+                try:
+                    from sqlalchemy import inspect
+                    inspector = inspect(self.engine)
+                    existing_tables = inspector.get_table_names()
+                    expected_tables = ['trades', 'ohlcv_data', 'model_predictions']
+                    if all(t in existing_tables for t in expected_tables):
+                        print(f"Tables verified to exist: {existing_tables}")
+                        DataStorage._tables_created = True
+                    else:
+                        print(f"WARNING: Tables may not exist. Expected: {expected_tables}, Found: {existing_tables}")
+                except:
+                    pass  # If we can't verify, don't mark as created
+    
+    def _ensure_tables_created(self):
+        """Ensure database tables exist (lazy creation fallback)"""
+        if not DataStorage._tables_created:
+            self.create_tables()
     
     def get_session(self) -> Session:
         """Get database session"""
