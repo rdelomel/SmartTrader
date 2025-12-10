@@ -200,6 +200,53 @@ strategies:
     low_volatility_threshold: 0.5
     high_volatility_threshold: 2.0
     volatility_expansion_factor: 1.5
+  
+  # CMC Markets Strategies
+  news_trading:
+    enabled: true
+    weight: 0.15
+    volatility_threshold: 0.015  # 1.5% minimum volatility
+    volume_spike_multiplier: 1.5  # Volume must be 1.5x average
+    price_movement_threshold: 0.005  # 0.5% minimum move
+    use_pre_news: true
+    use_post_news: true
+  
+  end_of_day:
+    enabled: true
+    weight: 0.12
+    close_hour: 15  # 3 PM
+    close_minute: 45
+    min_price_change: 0.003  # 0.3% minimum
+    compare_previous_day: true
+  
+  swing_trading:
+    enabled: true
+    weight: 0.18
+    swing_period: 14
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    min_swing_size: 0.02  # 2% minimum swing
+    use_support_resistance: true
+  
+  day_trading:
+    enabled: true
+    weight: 0.15
+    open_hour: 9
+    close_hour: 16
+    min_intraday_move: 0.005  # 0.5% minimum
+    use_breakouts: true
+    use_reversals: true
+    max_trades_per_day: 5
+  
+  scalping:
+    enabled: false  # Disabled by default - requires high volatility
+    weight: 0.1
+    min_volatility: 0.01  # 1% minimum volatility
+    min_volume_multiplier: 2.0  # 2x average volume
+    price_tick_size: 0.001  # 0.1% minimum move
+    use_order_flow: true
+    max_hold_time_minutes: 15
 
 # Model Performance Monitoring
 model_monitoring:

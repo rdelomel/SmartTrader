@@ -36,6 +36,11 @@ try:
     from .strategies.breakout import BreakoutStrategy
     from .strategies.momentum import MomentumStrategy
     from .strategies.volatility import VolatilityStrategy
+    from .strategies.news_trading import NewsTradingStrategy
+    from .strategies.end_of_day import EndOfDayStrategy
+    from .strategies.swing_trading import SwingTradingStrategy
+    from .strategies.day_trading import DayTradingStrategy
+    from .strategies.scalping import ScalpingStrategy
     from .data.news_fetcher import NewsFetcher
     from .ai.models.ml_models import MLModel
     try:
@@ -78,6 +83,11 @@ except ImportError:
     from src.strategies.breakout import BreakoutStrategy
     from src.strategies.momentum import MomentumStrategy
     from src.strategies.volatility import VolatilityStrategy
+    from src.strategies.news_trading import NewsTradingStrategy
+    from src.strategies.end_of_day import EndOfDayStrategy
+    from src.strategies.swing_trading import SwingTradingStrategy
+    from src.strategies.day_trading import DayTradingStrategy
+    from src.strategies.scalping import ScalpingStrategy
     from src.data.news_fetcher import NewsFetcher
     from src.ai.models.ml_models import MLModel
     try:
@@ -435,6 +445,36 @@ class TradingAgent:
         if strategy_configs.get('volatility', {}).get('enabled', False):
             strategies.append(VolatilityStrategy(
                 strategy_configs.get('volatility', {})
+            ))
+        
+        # News Trading
+        if strategy_configs.get('news_trading', {}).get('enabled', False):
+            strategies.append(NewsTradingStrategy(
+                strategy_configs.get('news_trading', {})
+            ))
+        
+        # End of Day
+        if strategy_configs.get('end_of_day', {}).get('enabled', False):
+            strategies.append(EndOfDayStrategy(
+                strategy_configs.get('end_of_day', {})
+            ))
+        
+        # Swing Trading
+        if strategy_configs.get('swing_trading', {}).get('enabled', False):
+            strategies.append(SwingTradingStrategy(
+                strategy_configs.get('swing_trading', {})
+            ))
+        
+        # Day Trading
+        if strategy_configs.get('day_trading', {}).get('enabled', False):
+            strategies.append(DayTradingStrategy(
+                strategy_configs.get('day_trading', {})
+            ))
+        
+        # Scalping
+        if strategy_configs.get('scalping', {}).get('enabled', False):
+            strategies.append(ScalpingStrategy(
+                strategy_configs.get('scalping', {})
             ))
         
         return strategies
