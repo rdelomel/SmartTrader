@@ -28,6 +28,7 @@ fredapi>=0.5.1  # Optional: For macro economic data
 # Database
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0  # PostgreSQL adapter for Python (v2, more compatible with SQLAlchemy 2.0)
+pg8000>=1.30.0         # Pure-Python PostgreSQL driver to avoid native crashes
 
 # Configuration
 pyyaml>=6.0

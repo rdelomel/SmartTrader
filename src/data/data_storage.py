@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
 from typing import List, Dict, Optional
 import os
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -78,6 +79,10 @@ class ModelPrediction(Base):
 
 class DataStorage:
     """Data storage manager for trading data"""
+
+    # Class-level flag and lock to guard lazy table creation from concurrent access
+    _tables_created = False
+    _tables_lock = threading.Lock()
     
     def __init__(self, database_url: Optional[str] = None):
         """
@@ -86,9 +91,6 @@ class DataStorage:
         Args:
             database_url: SQLAlchemy database URL. Defaults to SQLite if not provided.
         """
-        # Initialize tables_created flag for lazy table creation
-        self._tables_created = False
-        
         if database_url is None:
             database_url = os.getenv('DATABASE_URL', 'sqlite:///./data/trading.db')
         
@@ -115,11 +117,10 @@ class DataStorage:
             
             print(f"Connecting to database: {safe_url}")
             
-            # For PostgreSQL, use psycopg2 explicitly (more stable with SQLAlchemy 2.0)
+            # For PostgreSQL, use pure-Python pg8000 driver to avoid C-level memory issues
             if database_url.startswith('postgresql://'):
-                # Explicitly use psycopg2 driver
-                database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://', 1)
-                print("Using psycopg2 driver for PostgreSQL")
+                database_url = database_url.replace('postgresql://', 'postgresql+pg8000://', 1)
+                print("Using pg8000 driver for PostgreSQL")
             
             print("Creating database engine...")
             # Use more conservative connection settings to avoid memory issues
@@ -152,31 +153,35 @@ class DataStorage:
     
     def _ensure_tables_created(self):
         """Ensure database tables exist (lazy creation to avoid startup crashes)"""
-        if self._tables_created:
+        if DataStorage._tables_created:
             return
-        
-        print("Creating database tables (lazy initialization)...")
-        try:
-            # Use engine directly instead of connection to avoid memory issues
-            # This is simpler and less likely to cause C-level memory corruption
-            Base.metadata.create_all(self.engine, checkfirst=True)
-            self._tables_created = True
-            print("Database tables created successfully")
-        except Exception as table_error:
-            # Check if this is actually a connection error
-            error_str = str(table_error).lower()
-            if any(keyword in error_str for keyword in ['connection', 'connect', 'network', 'timeout', 'refused']):
-                print(f"FATAL: Connection error during table creation: {table_error}")
+
+        # Guard against concurrent creation attempts
+        with DataStorage._tables_lock:
+            if DataStorage._tables_created:
+                return
+
+            print("Creating database tables (lazy initialization)...")
+            try:
+                # Use engine directly instead of connection to avoid memory issues
+                Base.metadata.create_all(self.engine, checkfirst=True)
+                DataStorage._tables_created = True
+                print("Database tables created successfully")
+            except Exception as table_error:
+                # Check if this is actually a connection error
+                error_str = str(table_error).lower()
+                if any(keyword in error_str for keyword in ['connection', 'connect', 'network', 'timeout', 'refused']):
+                    print(f"FATAL: Connection error during table creation: {table_error}")
+                    import traceback
+                    traceback.print_exc()
+                    raise ConnectionError(f"Database connection failed during table creation: {table_error}") from table_error
+                
+                # For other errors, log but don't fail - tables might already exist
+                print(f"Warning: Error creating tables (may already exist): {table_error}")
                 import traceback
                 traceback.print_exc()
-                raise ConnectionError(f"Database connection failed during table creation: {table_error}") from table_error
-            
-            # For other errors, log but don't fail - tables might already exist
-            print(f"Warning: Error creating tables (may already exist): {table_error}")
-            import traceback
-            traceback.print_exc()
-            # Mark as created anyway to avoid repeated attempts
-            self._tables_created = True
+                # Mark as created anyway to avoid repeated attempts
+                DataStorage._tables_created = True
     
     def get_session(self) -> Session:
         """Get database session"""
