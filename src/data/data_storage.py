@@ -100,12 +100,50 @@ class DataStorage:
                 print(f"Using existing SQLite database at: {db_path}")
         
         try:
-            self.engine = create_engine(database_url, echo=False)
+            # Mask password in URL for logging
+            safe_url = database_url
+            if '@' in database_url:
+                parts = database_url.split('@')
+                if '://' in parts[0]:
+                    user_pass = parts[0].split('://')[1]
+                    if ':' in user_pass:
+                        user = user_pass.split(':')[0]
+                        safe_url = database_url.split('://')[0] + '://' + user + ':***@' + '@'.join(parts[1:])
+            
+            print(f"Connecting to database: {safe_url}")
+            
+            # For PostgreSQL, ensure we're using the right driver
+            if database_url.startswith('postgresql://'):
+                # Try to use psycopg3 if available, otherwise psycopg2
+                try:
+                    import psycopg
+                    database_url = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
+                    print("Using psycopg (v3) driver")
+                except ImportError:
+                    try:
+                        import psycopg2
+                        database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://', 1)
+                        print("Using psycopg2 driver")
+                    except ImportError:
+                        print("Warning: No PostgreSQL driver found, using default")
+            
+            print("Creating database engine...")
+            self.engine = create_engine(
+                database_url, 
+                echo=False, 
+                pool_pre_ping=True,  # Verify connections before using
+                pool_recycle=300,    # Recycle connections after 5 minutes
+                connect_args={"connect_timeout": 10}  # 10 second connection timeout
+            )
+            print("Database engine created, creating tables...")
             Base.metadata.create_all(self.engine)
+            print("Tables created, creating session maker...")
             self.Session = sessionmaker(bind=self.engine)
             print("Database initialized successfully")
         except Exception as e:
             print(f"Error initializing database: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def get_session(self) -> Session:

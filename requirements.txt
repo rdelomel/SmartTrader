@@ -27,7 +27,8 @@ fredapi>=0.5.1  # Optional: For macro economic data
 
 # Database
 sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0  # PostgreSQL adapter for Python (required for Railway PostgreSQL)
+psycopg[binary]>=3.1.0  # PostgreSQL adapter for Python (v3, more stable than psycopg2)
+# Fallback: psycopg2-binary>=2.9.0  # Use if psycopg3 doesn't work
 
 # Configuration
 pyyaml>=6.0
