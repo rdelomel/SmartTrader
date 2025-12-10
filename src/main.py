@@ -113,210 +113,242 @@ class TradingAgent:
     
     def __init__(self, config_dir: str = "config"):
         """Initialize trading agent"""
-        self.config_dir = config_dir
-        self.running = False
-        self.initial_equity: Optional[float] = None
-        
-        # Load configurations
-        self.trading_config = self._load_config(f"{config_dir}/trading_config.yaml")
-        self.broker_config = self._load_config(f"{config_dir}/broker_config.yaml")
-        self.model_config = self._load_config(f"{config_dir}/model_config.yaml")
-        
-        # Initialize components
-        self.storage = DataStorage()
-        self.logger = TradingLogger(self.trading_config.get('logging', {}))
-        self.preprocessor = DataPreprocessor()
-        self.indicators = TechnicalIndicators()
-        self.feature_engineer = FeatureEngineer()
-        
-        # Initialize brokers
-        self.brokers = self._initialize_brokers()
-        
-        # Update default broker mapping - use Alpaca for crypto
-        if 'crypto' not in self.brokers and 'stocks' in self.brokers:
-            # Use Alpaca for crypto if Binance not available
-            self.brokers['crypto'] = self.brokers['stocks']
-        
-        # Initialize dictionaries for per-broker tracking (before creating managers)
-        self.drawdown_managers = {}  # broker_name -> DrawdownManager
-        self.circuit_breakers = {}  # broker_name -> CircuitBreaker
-        self.performance_trackers = {}  # broker_name -> PerformanceTracker
-        
-        # Initialize per-broker drawdown managers, circuit breakers, and performance trackers
-        # This allows separate drawdown tracking for each account
-        risk_config = self.trading_config.get('risk', {})
-        aggressive_config = self.trading_config.get('aggressive_mode', {})
-        circuit_breaker_config = self.trading_config.get('agents', {}).get('risk_manager', {}).get('circuit_breaker', {})
-        
-        for broker_name, broker in self.brokers.items():
-            # Create drawdown manager for this broker
-            self.drawdown_managers[broker_name] = DrawdownManager(risk_config)
+        try:
+            print(f"[INIT] Starting TradingAgent initialization...")
+            self.config_dir = config_dir
+            self.running = False
+            self.initial_equity: Optional[float] = None
             
-            # Create circuit breaker for this broker
-            self.circuit_breakers[broker_name] = CircuitBreaker(circuit_breaker_config)
+            # Load configurations
+            print(f"[INIT] Loading configuration files...")
+            self.trading_config = self._load_config(f"{config_dir}/trading_config.yaml")
+            self.broker_config = self._load_config(f"{config_dir}/broker_config.yaml")
+            self.model_config = self._load_config(f"{config_dir}/model_config.yaml")
+            print(f"[INIT] Configuration files loaded")
             
-            # Create performance tracker for this broker (if aggressive mode enabled)
+            # Initialize components
+            print(f"[INIT] Initializing DataStorage...")
+            self.storage = DataStorage()
+            print(f"[INIT] DataStorage initialized")
+            
+            print(f"[INIT] Initializing Logger...")
+            self.logger = TradingLogger(self.trading_config.get('logging', {}))
+            print(f"[INIT] Logger initialized")
+            
+            print(f"[INIT] Initializing preprocessor, indicators, feature engineer...")
+            self.preprocessor = DataPreprocessor()
+            self.indicators = TechnicalIndicators()
+            self.feature_engineer = FeatureEngineer()
+            print(f"[INIT] Preprocessing components initialized")
+            
+            # Initialize brokers
+            print(f"[INIT] Initializing brokers...")
+            self.brokers = self._initialize_brokers()
+            print(f"[INIT] Brokers initialized: {list(self.brokers.keys())}")
+            
+            # Update default broker mapping - use Alpaca for crypto
+            if 'crypto' not in self.brokers and 'stocks' in self.brokers:
+                # Use Alpaca for crypto if Binance not available
+                self.brokers['crypto'] = self.brokers['stocks']
+            
+            # Initialize dictionaries for per-broker tracking (before creating managers)
+            self.drawdown_managers = {}  # broker_name -> DrawdownManager
+            self.circuit_breakers = {}  # broker_name -> CircuitBreaker
+            self.performance_trackers = {}  # broker_name -> PerformanceTracker
+            
+            # Initialize per-broker drawdown managers, circuit breakers, and performance trackers
+            # This allows separate drawdown tracking for each account
+            risk_config = self.trading_config.get('risk', {})
+            aggressive_config = self.trading_config.get('aggressive_mode', {})
+            circuit_breaker_config = self.trading_config.get('agents', {}).get('risk_manager', {}).get('circuit_breaker', {})
+            
+            for broker_name, broker in self.brokers.items():
+                # Create drawdown manager for this broker
+                self.drawdown_managers[broker_name] = DrawdownManager(risk_config)
+                
+                # Create circuit breaker for this broker
+                self.circuit_breakers[broker_name] = CircuitBreaker(circuit_breaker_config)
+                
+                # Create performance tracker for this broker (if aggressive mode enabled)
+                if aggressive_config.get('enabled', False):
+                    self.performance_trackers[broker_name] = PerformanceTracker({
+                        'target_weekly_return': aggressive_config.get('target_weekly_return', 3.0),
+                        'max_drawdown': aggressive_config.get('max_drawdown', 4.5)
+                    })
+                else:
+                    self.performance_trackers[broker_name] = None
+            
+            # Initialize strategies
+            print(f"[INIT] Initializing strategies...")
+            self.strategies = self._initialize_strategies()
+            print(f"[INIT] Strategies initialized: {len(self.strategies)} strategies")
+            
+            # Initialize AI models
+            print(f"[INIT] Initializing AI models...")
+            self.model_trainer = ModelTrainer(self.model_config.get('training', {}))
+            self.ml_model, self.lstm_model = self._initialize_ai_models()
+            self.sentiment_analyzer = SentimentAnalyzer(self.model_config.get('sentiment', {}))
+            self.anomaly_detector = AnomalyDetector(self.model_config.get('anomaly_detection', {}))
+            self.news_fetcher = NewsFetcher(self.model_config.get('sentiment', {}))
+            self.last_model_retrain = {}  # Track last retrain time for each model
+            print(f"[INIT] AI models initialized")
+            
+            # Initialize stock discovery service for dynamic stock selection
+            from .data.stock_discovery import StockDiscoveryService
+            stocks_config = self.trading_config.get('assets', {}).get('stocks', {})
+            self.stock_discovery = StockDiscoveryService(
+                self.news_fetcher,
+                stocks_config
+            ) if stocks_config.get('dynamic_discovery', False) else None
+            
+            # Initialize risk management components
+            print(f"[INIT] Initializing risk management...")
+            self.position_sizer = PositionSizer(self.trading_config.get('risk', {}))
+            self.stop_loss_manager = StopLossManager(self.trading_config.get('risk', {}))
+            
+            # Create main drawdown manager (for backward compatibility and aggregated tracking)
+            self.drawdown_manager = DrawdownManager(self.trading_config.get('risk', {}))
+            
+            self.risk_calculator = RiskCalculator()
+            from .risk.portfolio_risk_manager import PortfolioRiskManager
+            # Get portfolio risk config - check both locations for compatibility
+            portfolio_risk_config = (
+                self.trading_config.get('portfolio_risk', {}) or
+                self.trading_config.get('agents', {}).get('risk_manager', {}).get('portfolio_risk', {})
+            )
+            self.portfolio_risk_manager = PortfolioRiskManager(portfolio_risk_config)
+            print(f"[INIT] Risk management initialized")
+            
+            # Initialize Multi-Agent Framework
+            print(f"[INIT] Initializing agents...")
+            # 1. Analytical Agents
+            self.technical_agent = TechnicalAnalystAgent(
+                config=self.trading_config.get('agents', {}).get('technical', {}),
+                strategies=self.strategies,
+                ml_model=self.ml_model,
+                lstm_model=self.lstm_model
+            )
+            
+            self.sentiment_agent = SentimentAgent(
+                config=self.trading_config.get('agents', {}).get('sentiment', {}),
+                sentiment_analyzer=self.sentiment_analyzer,
+                news_fetcher=self.news_fetcher
+            )
+            
+            self.fundamental_agent = FundamentalAgent(
+                config=self.trading_config.get('agents', {}).get('fundamental', {})
+            )
+            
+            # 2. Regime-Switching Agent
+            self.regime_agent = RegimeSwitchingAgent(
+                config=self.trading_config.get('agents', {}).get('regime_switching', {})
+            )
+            # Train regime agent on historical data if available
+            self._train_regime_agent()
+            
+            # 3. Risk Manager Agent (with Circuit Breaker)
+            circuit_breaker = CircuitBreaker(
+                self.trading_config.get('agents', {}).get('risk_manager', {}).get('circuit_breaker', {})
+            )
+            self.risk_agent = RiskManagerAgent(
+                config=self.trading_config.get('agents', {}).get('risk_manager', {}),
+                position_sizer=self.position_sizer,
+                drawdown_manager=self.drawdown_manager,
+                stop_loss_manager=self.stop_loss_manager,
+                circuit_breaker=circuit_breaker
+            )
+            
+            # 4. DRL Agent (if aggressive mode enabled)
+            self.drl_agent = None
+            self.drl_trainer = None
+            aggressive_config = self.trading_config.get('aggressive_mode', {})
+            if aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True):
+                drl_config = self.model_config.get('drl', {})
+                if drl_config.get('enabled', False):
+                    self.drl_agent = DRLAgent(drl_config)
+                    self.drl_trainer = DRLTrainer(drl_config)
+                    
+                    # Try to load existing model
+                    model_path = os.path.join(self.model_trainer.models_dir, f"drl_{self.drl_agent.algorithm}.zip")
+                    if os.path.exists(model_path):
+                        try:
+                            self.drl_agent.load(model_path)
+                            print(f"Loaded DRL model from {model_path}")
+                        except Exception as e:
+                            print(f"Error loading DRL model: {e}")
+            
+            # 5. Performance Tracker (for aggressive mode) - Initialize before orchestrator
             if aggressive_config.get('enabled', False):
-                self.performance_trackers[broker_name] = PerformanceTracker({
+                self.performance_tracker = PerformanceTracker({
                     'target_weekly_return': aggressive_config.get('target_weekly_return', 3.0),
                     'max_drawdown': aggressive_config.get('max_drawdown', 4.5)
                 })
             else:
-                self.performance_trackers[broker_name] = None
-        
-        # Initialize strategies
-        self.strategies = self._initialize_strategies()
-        
-        # Initialize AI models
-        self.model_trainer = ModelTrainer(self.model_config.get('training', {}))
-        self.ml_model, self.lstm_model = self._initialize_ai_models()
-        self.sentiment_analyzer = SentimentAnalyzer(self.model_config.get('sentiment', {}))
-        self.anomaly_detector = AnomalyDetector(self.model_config.get('anomaly_detection', {}))
-        self.news_fetcher = NewsFetcher(self.model_config.get('sentiment', {}))
-        self.last_model_retrain = {}  # Track last retrain time for each model
-        
-        # Initialize stock discovery service for dynamic stock selection
-        from .data.stock_discovery import StockDiscoveryService
-        stocks_config = self.trading_config.get('assets', {}).get('stocks', {})
-        self.stock_discovery = StockDiscoveryService(
-            self.news_fetcher,
-            stocks_config
-        ) if stocks_config.get('dynamic_discovery', False) else None
-        
-        # Initialize risk management components
-        self.position_sizer = PositionSizer(self.trading_config.get('risk', {}))
-        self.stop_loss_manager = StopLossManager(self.trading_config.get('risk', {}))
-        
-        # Create main drawdown manager (for backward compatibility and aggregated tracking)
-        self.drawdown_manager = DrawdownManager(self.trading_config.get('risk', {}))
-        
-        self.risk_calculator = RiskCalculator()
-        from .risk.portfolio_risk_manager import PortfolioRiskManager
-        # Get portfolio risk config - check both locations for compatibility
-        portfolio_risk_config = (
-            self.trading_config.get('portfolio_risk', {}) or
-            self.trading_config.get('agents', {}).get('risk_manager', {}).get('portfolio_risk', {})
-        )
-        self.portfolio_risk_manager = PortfolioRiskManager(portfolio_risk_config)
-        
-        # Initialize Multi-Agent Framework
-        # 1. Analytical Agents
-        self.technical_agent = TechnicalAnalystAgent(
-            config=self.trading_config.get('agents', {}).get('technical', {}),
-            strategies=self.strategies,
-            ml_model=self.ml_model,
-            lstm_model=self.lstm_model
-        )
-        
-        self.sentiment_agent = SentimentAgent(
-            config=self.trading_config.get('agents', {}).get('sentiment', {}),
-            sentiment_analyzer=self.sentiment_analyzer,
-            news_fetcher=self.news_fetcher
-        )
-        
-        self.fundamental_agent = FundamentalAgent(
-            config=self.trading_config.get('agents', {}).get('fundamental', {})
-        )
-        
-        # 2. Regime-Switching Agent
-        self.regime_agent = RegimeSwitchingAgent(
-            config=self.trading_config.get('agents', {}).get('regime_switching', {})
-        )
-        # Train regime agent on historical data if available
-        self._train_regime_agent()
-        
-        # 3. Risk Manager Agent (with Circuit Breaker)
-        circuit_breaker = CircuitBreaker(
-            self.trading_config.get('agents', {}).get('risk_manager', {}).get('circuit_breaker', {})
-        )
-        self.risk_agent = RiskManagerAgent(
-            config=self.trading_config.get('agents', {}).get('risk_manager', {}),
-            position_sizer=self.position_sizer,
-            drawdown_manager=self.drawdown_manager,
-            stop_loss_manager=self.stop_loss_manager,
-            circuit_breaker=circuit_breaker
-        )
-        
-        # 4. DRL Agent (if aggressive mode enabled)
-        self.drl_agent = None
-        self.drl_trainer = None
-        aggressive_config = self.trading_config.get('aggressive_mode', {})
-        if aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True):
-            drl_config = self.model_config.get('drl', {})
-            if drl_config.get('enabled', False):
-                self.drl_agent = DRLAgent(drl_config)
-                self.drl_trainer = DRLTrainer(drl_config)
-                
-                # Try to load existing model
-                model_path = os.path.join(self.model_trainer.models_dir, f"drl_{self.drl_agent.algorithm}.zip")
-                if os.path.exists(model_path):
-                    try:
-                        self.drl_agent.load(model_path)
-                        print(f"Loaded DRL model from {model_path}")
-                    except Exception as e:
-                        print(f"Error loading DRL model: {e}")
-        
-        # 5. Performance Tracker (for aggressive mode) - Initialize before orchestrator
-        if aggressive_config.get('enabled', False):
-            self.performance_tracker = PerformanceTracker({
-                'target_weekly_return': aggressive_config.get('target_weekly_return', 3.0),
-                'max_drawdown': aggressive_config.get('max_drawdown', 4.5)
-            })
-        else:
-            self.performance_tracker = None
-        
-        # 6. Orchestrator Agent
-        orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
-        orchestrator_config['use_drl'] = aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True)
-        self.orchestrator_agent = OrchestratorAgent(
-            config=orchestrator_config,
-            technical_agent=self.technical_agent,
-            sentiment_agent=self.sentiment_agent,
-            fundamental_agent=self.fundamental_agent,
-            regime_agent=self.regime_agent,
-            risk_agent=self.risk_agent,
-            drl_agent=self.drl_agent,
-            performance_tracker=self.performance_tracker
-        )
-        
-        # Keep DecisionEngine for backward compatibility (wrapper)
-        self.decision_engine = DecisionEngine(self.trading_config.get('strategies', {}))
-        for strategy in self.strategies:
-            self.decision_engine.add_strategy(strategy)
-        self.decision_engine.set_sentiment_analyzer(self.sentiment_analyzer)
-        if self.ml_model:
-            self.decision_engine.set_ml_model(self.ml_model)
-        if self.lstm_model:
-            self.decision_engine.set_lstm_model(self.lstm_model)
-        
-        # Initialize execution
-        paper_trading = os.getenv('TRADING_MODE', 'paper') == 'paper'
-        # Use Alpaca as default (supports both stocks and crypto)
-        default_broker = self.brokers.get('stocks') or self.brokers.get('crypto') or list(self.brokers.values())[0] if self.brokers else None
-        if default_broker:
-            self.order_manager = OrderManager(
-                default_broker,
-                self.storage,
-                paper_trading=paper_trading
+                self.performance_tracker = None
+            
+            # 6. Orchestrator Agent
+            orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
+            orchestrator_config['use_drl'] = aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True)
+            self.orchestrator_agent = OrchestratorAgent(
+                config=orchestrator_config,
+                technical_agent=self.technical_agent,
+                sentiment_agent=self.sentiment_agent,
+                fundamental_agent=self.fundamental_agent,
+                regime_agent=self.regime_agent,
+                risk_agent=self.risk_agent,
+                drl_agent=self.drl_agent,
+                performance_tracker=self.performance_tracker
             )
-        else:
-            print("Warning: No broker available for order management")
-        
-        # Initialize strategy selector
-        self.strategy_selector = StrategySelector(
-            self.trading_config.get('model_monitoring', {})
-        )
-        
-        # Initialize dashboard
-        self.dashboard_app = create_dashboard_app(
-            storage=self.storage, 
-            brokers=self.brokers,
-            initial_equity=self.initial_equity
-        )
-        
-        # Setup signal handlers
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+            
+            # Keep DecisionEngine for backward compatibility (wrapper)
+            self.decision_engine = DecisionEngine(self.trading_config.get('strategies', {}))
+            for strategy in self.strategies:
+                self.decision_engine.add_strategy(strategy)
+            self.decision_engine.set_sentiment_analyzer(self.sentiment_analyzer)
+            if self.ml_model:
+                self.decision_engine.set_ml_model(self.ml_model)
+            if self.lstm_model:
+                self.decision_engine.set_lstm_model(self.lstm_model)
+            
+            # Initialize execution
+            paper_trading = os.getenv('TRADING_MODE', 'paper') == 'paper'
+            # Use Alpaca as default (supports both stocks and crypto)
+            default_broker = self.brokers.get('stocks') or self.brokers.get('crypto') or list(self.brokers.values())[0] if self.brokers else None
+            if default_broker:
+                self.order_manager = OrderManager(
+                    default_broker,
+                    self.storage,
+                    paper_trading=paper_trading
+                )
+            else:
+                print("Warning: No broker available for order management")
+            
+            # Initialize strategy selector
+            self.strategy_selector = StrategySelector(
+                self.trading_config.get('model_monitoring', {})
+            )
+            
+            # Initialize dashboard
+            print(f"[INIT] Initializing dashboard...")
+            self.dashboard_app = create_dashboard_app(
+                storage=self.storage, 
+                brokers=self.brokers,
+                initial_equity=self.initial_equity
+            )
+            print(f"[INIT] Dashboard initialized")
+            
+            # Setup signal handlers
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            
+            print(f"[INIT] TradingAgent initialization complete!")
+        except Exception as e:
+            print(f"\n[INIT ERROR] Failed during TradingAgent initialization:")
+            print(f"Error: {str(e)}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            raise  # Re-raise so main() can catch it
     
     def _load_config(self, filepath: str) -> Dict:
         """Load YAML configuration file"""
