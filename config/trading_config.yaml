@@ -38,7 +38,10 @@ agents:
     min_matches: 3  # Minimum similar patterns required
     similarity_threshold: 0.7  # Minimum similarity score (0-1)
     correlation_threshold: 0.6  # Minimum correlation coefficient
-    historical_lookback_days: 365  # Days of history to search
+    historical_lookback_days: 180  # Days of history to search (reduced from 365 for performance)
+    max_historical_records: 5000  # Maximum records to fetch from database
+    max_historical_bars: 2000  # Maximum bars to process (prevents memory issues)
+    analysis_timeout_seconds: 30  # Timeout for pattern analysis
   
   regime_switching:
     enabled: true

@@ -380,10 +380,16 @@ class PatternForecaster:
         patterns = []
         extractor = PatternExtractor(pattern_length=self.extractor.pattern_length)
         
-        # Extract patterns with step size
+        # Extract patterns with step size (larger step = fewer patterns = faster)
         step = max(1, self.extractor.pattern_length // 2)
         
+        # Limit number of patterns to extract to prevent performance issues
+        max_patterns = 500  # Maximum patterns to extract
+        pattern_count = 0
+        
         for i in range(self.extractor.pattern_length, len(historical_data) - self.lookahead_periods, step):
+            if pattern_count >= max_patterns:
+                break
             # Extract pattern
             pattern = extractor.extract_pattern(historical_data, i)
             if not pattern:
@@ -405,6 +411,7 @@ class PatternForecaster:
                 pattern['pattern_id'] = f"pattern_{i}"
                 
                 patterns.append(pattern)
+                pattern_count += 1
         
         return patterns
     

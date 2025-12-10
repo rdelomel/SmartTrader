@@ -321,13 +321,21 @@ class DataStorage:
             if end_date:
                 query = query.filter(OHLCVData.timestamp <= end_date)
             
-            query = query.order_by(OHLCVData.timestamp.asc())
+            query = query.order_by(OHLCVData.timestamp.desc())  # Get most recent first
             
             if limit:
                 query = query.limit(limit)
             
-            records = query.all()
-            return [r.to_dict() for r in records]
+            # Use timeout protection for long queries
+            try:
+                records = query.all()
+                # Reverse to get chronological order (oldest first)
+                records = list(reversed(records))
+                return [r.to_dict() for r in records]
+            except Exception as e:
+                print(f"Error executing query (may be timeout): {e}")
+                # Return empty list on error to prevent connection issues
+                return []
         except Exception as e:
             print(f"Error retrieving OHLCV data: {e}")
             return []

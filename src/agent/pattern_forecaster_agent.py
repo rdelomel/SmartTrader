@@ -64,8 +64,18 @@ class PatternForecasterAgent(BaseAgent):
         print(f"\n=== PatternForecaster analyzing {symbol} ===")
         
         try:
-            # Get historical data for pattern matching
-            historical_data = self._get_historical_data(symbol, timeframe)
+            # Get historical data for pattern matching with error handling
+            try:
+                historical_data = self._get_historical_data(symbol, timeframe)
+            except Exception as e:
+                print(f"  Error fetching historical data: {e}")
+                return {
+                    'signal': Signal.HOLD,
+                    'score': 0.0,
+                    'confidence': 0.0,
+                    'source': self.name,
+                    'reason': f'Error fetching historical data: {str(e)}'
+                }
             
             if historical_data is None or len(historical_data) < self.pattern_length * 2:
                 print(f"  Insufficient historical data for pattern matching")
@@ -77,12 +87,28 @@ class PatternForecasterAgent(BaseAgent):
                     'reason': 'Insufficient historical data'
                 }
             
-            # Forecast using pattern matching
-            forecast = self.forecaster.forecast(
-                current_data=data,
-                historical_data=historical_data,
-                min_matches=self.min_matches
-            )
+            # Limit historical data size to prevent memory issues
+            max_historical_bars = self.config.get('max_historical_bars', 2000)
+            if len(historical_data) > max_historical_bars:
+                print(f"  Limiting historical data from {len(historical_data)} to {max_historical_bars} bars")
+                historical_data = historical_data.iloc[-max_historical_bars:]
+            
+            # Forecast using pattern matching with error handling
+            try:
+                forecast = self.forecaster.forecast(
+                    current_data=data,
+                    historical_data=historical_data,
+                    min_matches=self.min_matches
+                )
+            except Exception as e:
+                print(f"  Error in pattern forecasting: {e}")
+                return {
+                    'signal': Signal.HOLD,
+                    'score': 0.0,
+                    'confidence': 0.0,
+                    'source': self.name,
+                    'reason': f'Pattern matching error: {str(e)}'
+                }
             
             if forecast.get('signal') is None:
                 print(f"  No forecast generated: {forecast.get('reason', 'Unknown')}")
@@ -155,13 +181,15 @@ class PatternForecasterAgent(BaseAgent):
             end_date = datetime.utcnow()
             start_date = end_date - timedelta(days=self.historical_lookback_days)
             
-            # Get historical data from storage
+            # Get historical data from storage with optimized limit
+            # Reduce limit to avoid long-running queries and connection timeouts
+            max_records = self.config.get('max_historical_records', 5000)
             historical_records = self.storage.get_ohlcv_data(
                 symbol=symbol,
                 timeframe=timeframe,
                 start_date=start_date,
                 end_date=end_date,
-                limit=10000  # Get up to 10k records
+                limit=max_records  # Configurable limit (default: 5k records)
             )
             
             if not historical_records:
