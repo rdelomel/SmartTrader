@@ -137,21 +137,8 @@ class DataStorage:
             )
             print("Database engine created")
             
-            # CRITICAL: Test connection BEFORE table creation to fail fast if database is unreachable
-            print("Testing database connection...")
-            try:
-                # Simple connection test - just verify we can establish a connection
-                conn = self.engine.connect()
-                conn.close()
-                print("Database connection test successful")
-            except Exception as conn_error:
-                print(f"FATAL: Cannot connect to database: {conn_error}")
-                import traceback
-                traceback.print_exc()
-                raise ConnectionError(f"Database connection failed: {conn_error}") from conn_error
-            
-            # DEFER table creation to avoid memory corruption issues during initialization
-            # Tables will be created lazily on first use (see _ensure_tables_created method)
+            # DEFER table creation (and explicit connection tests) to avoid memory corruption issues during initialization.
+            # Tables will be created lazily on first use (see _ensure_tables_created method).
             print("Skipping table creation during initialization (will be created on first use)")
             
             print("Creating session maker...")
