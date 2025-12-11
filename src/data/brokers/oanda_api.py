@@ -402,21 +402,29 @@ class OANDABroker(BaseBroker):
             
             response = self.session.post(url, json=order_data)
             
-            # Better error handling - capture OANDA's error response
-            if response.status_code != 200:
-                error_data = {}
-                try:
-                    error_data = response.json()
-                except:
-                    error_data = {'error': response.text}
-                
-                # Extract error message - OANDA can return errors in different formats
-                error_msg = error_data.get('errorMessage', 
-                                         error_data.get('error', 
-                                                       error_data.get('message', 
-                                                                     str(response.status_code))))
-                error_code = error_data.get('errorCode', error_data.get('code', 'UNKNOWN'))
-                
+            # OANDA returns 200 (OK) or 201 (Created) for successful orders
+            # 201 means the order was successfully created and may be filled immediately
+            is_success = response.status_code in [200, 201]
+            
+            # Parse response data
+            try:
+                data = response.json()
+            except:
+                data = {}
+            
+            # Check if response contains an error (even with 200/201 status)
+            error_data = data if not is_success else {}
+            error_msg = data.get('errorMessage', '') if not is_success else None
+            error_code = data.get('errorCode', '') if not is_success else None
+            
+            # Also check for orderRejectTransaction which indicates rejection
+            if 'orderRejectTransaction' in data:
+                is_success = False
+                error_data = data
+                error_msg = data.get('errorMessage', 'Order was rejected')
+                error_code = data.get('errorCode', 'ORDER_REJECTED')
+            
+            if not is_success:
                 # Log detailed error information
                 print(f"  ❌ OANDA API Error ({response.status_code}): {error_code}")
                 print(f"     Error Message: {error_msg}")
@@ -424,34 +432,59 @@ class OANDABroker(BaseBroker):
                 print(f"     Order that was rejected: {order_data}")
                 
                 # Check for common rejection reasons
-                if 'insufficient' in error_msg.lower() or 'margin' in error_msg.lower():
-                    print(f"     💡 Suggestion: Check account balance and margin requirements")
-                elif 'size' in error_msg.lower() or 'units' in error_msg.lower():
-                    print(f"     💡 Suggestion: Order size may be too large or too small for this instrument")
-                elif 'instrument' in error_msg.lower():
-                    print(f"     💡 Suggestion: Check if instrument code '{oanda_symbol}' is correct")
-                elif 'market' in error_msg.lower() and 'closed' in error_msg.lower():
-                    print(f"     💡 Suggestion: Market may be closed for this instrument")
+                if error_msg:
+                    if 'insufficient' in error_msg.lower() or 'margin' in error_msg.lower():
+                        print(f"     💡 Suggestion: Check account balance and margin requirements")
+                    elif 'size' in error_msg.lower() or 'units' in error_msg.lower():
+                        print(f"     💡 Suggestion: Order size may be too large or too small for this instrument")
+                    elif 'instrument' in error_msg.lower():
+                        print(f"     💡 Suggestion: Check if instrument code '{oanda_symbol}' is correct")
+                    elif 'market' in error_msg.lower() and 'closed' in error_msg.lower():
+                        print(f"     💡 Suggestion: Market may be closed for this instrument")
                 
                 return {
                     'order_id': None,
                     'status': OrderStatus.REJECTED,
-                    'error': f"{response.status_code} {error_code}: {error_msg}",
+                    'error': f"{response.status_code} {error_code}: {error_msg}" if error_msg else f"HTTP {response.status_code}",
                     'error_details': error_data
                 }
             
-            response.raise_for_status()
-            data = response.json()
+            # Success - order was created/filled
+            if response.status_code == 201:
+                print(f"  ✅ Order created successfully (HTTP 201)")
             
-            order_info = data.get('orderFillTransaction', data.get('orderCreateTransaction', {}))
+            # Extract order information - OANDA may return orderFillTransaction (filled immediately)
+            # or orderCreateTransaction (pending) in the response
+            order_fill = data.get('orderFillTransaction')
+            order_create = data.get('orderCreateTransaction')
+            
+            # Prefer fill transaction if available (order was filled immediately)
+            if order_fill:
+                order_info = order_fill
+                order_id = order_fill.get('orderID') or order_fill.get('id')
+                filled_units = abs(float(order_fill.get('units', 0)))
+                fill_price = float(order_fill.get('price', 0.0))
+                print(f"  ✅ Order filled immediately: ID={order_id}, Units={filled_units}, Price={fill_price}")
+            elif order_create:
+                order_info = order_create
+                order_id = order_create.get('id')
+                filled_units = 0  # Not filled yet
+                fill_price = price or 0.0
+                print(f"  ✅ Order created (pending): ID={order_id}")
+            else:
+                # Fallback - try to find any transaction with order info
+                order_info = data.get('orderFillTransaction', data.get('orderCreateTransaction', {}))
+                order_id = order_info.get('id') or order_info.get('orderID')
+                filled_units = abs(float(order_info.get('units', 0)))
+                fill_price = float(order_info.get('price', price or 0.0))
             
             return {
-                'order_id': order_info.get('id'),
-                'status': OrderStatus.FILLED if 'orderFillTransaction' in data else OrderStatus.PENDING,
-                'filled_quantity': abs(float(order_info.get('units', 0))),
+                'order_id': str(order_id) if order_id else None,
+                'status': OrderStatus.FILLED if order_fill else OrderStatus.PENDING,
+                'filled_quantity': filled_units,
                 'symbol': symbol,
                 'side': side.value,
-                'price': float(order_info.get('price', price or 0.0)),
+                'price': fill_price,
                 'timestamp': datetime.now()
             }
         except requests.exceptions.HTTPError as e:
