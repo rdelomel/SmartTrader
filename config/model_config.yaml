@@ -64,15 +64,18 @@ sentiment:
   max_tokens: 150
   temperature: 0.3
   news_sources:
+    - cryptocompare  # CryptoCompare (free, no key needed for crypto) - PRIMARY
+    - reddit  # Reddit (free, no API key needed) - PRIMARY for sentiment
     - newsapi  # NewsAPI (recommended - requires NEWSAPI_API_KEY)
-    - cryptocompare  # CryptoCompare (free, no key needed for crypto)
     - alphavantage  # Alpha Vantage (optional - requires ALPHA_VANTAGE_API_KEY)
     - rss  # RSS feeds (fallback)
   # News source configuration
   newsapi_enabled: true  # Enable NewsAPI (requires NEWSAPI_API_KEY in .env)
   alphavantage_enabled: false  # Enable Alpha Vantage news (requires ALPHA_VANTAGE_API_KEY)
   cryptocompare_enabled: true  # Enable CryptoCompare (free, no key needed)
+  reddit_enabled: true  # Enable Reddit (free, no API key needed)
   update_frequency_minutes: 15
+  cache_ttl_minutes: 15  # Cache news for 15 minutes per symbol to reduce API calls
   sentiment_threshold: 0.3  # Minimum absolute sentiment to influence trading
   # Enhanced RSS feeds with crypto-specific sources
   rss_feeds:

@@ -47,9 +47,11 @@ class NewsFetcher:
         # Enhanced RSS feeds with crypto-specific sources
         # Updated URLs as of Dec 2025 - focusing on most reliable feeds
         # Note: Many RSS feeds have become unreliable (403, 526 errors, SSL issues)
-        # Primary news sources: NewsAPI, CryptoCompare, Alpha Vantage (if configured)
+        # Primary news sources: NewsAPI, CryptoCompare, Alpha Vantage (if configured), Reddit
         # RSS feeds are secondary/fallback sources
         self.rss_feeds = self.config.get('rss_feeds', [
+            # Google News RSS (more reliable, aggregates multiple sources)
+            'https://news.google.com/rss/search?q=cryptocurrency+OR+bitcoin+OR+ethereum&hl=en-US&gl=US&ceid=US:en',
             # Crypto-specific RSS feeds (most reliable for crypto news)
             'https://www.coindesk.com/arc/outboundfeeds/rss/',  # CoinDesk - usually reliable
             'https://cointelegraph.com/rss',  # CoinTelegraph - usually reliable
@@ -76,6 +78,12 @@ class NewsFetcher:
         ])
         self.last_fetch_time = None
         self.cached_news = []
+        # Per-symbol caching for better efficiency
+        self.symbol_cache = {}  # symbol -> (articles, timestamp)
+        self.cache_ttl_minutes = self.config.get('cache_ttl_minutes', 15)
+        
+        # Enable Reddit as free news source (no API key needed for public data)
+        self.reddit_enabled = self.config.get('reddit_enabled', True)
         
         # Log enabled sources
         enabled_sources = []
@@ -85,6 +93,8 @@ class NewsFetcher:
             enabled_sources.append("Alpha Vantage")
         if self.cryptocompare_enabled:
             enabled_sources.append("CryptoCompare")
+        if self.reddit_enabled:
+            enabled_sources.append("Reddit")
         enabled_sources.append(f"RSS ({len(self.rss_feeds)} feeds)")
         print(f"NewsFetcher: Initialized with sources: {', '.join(enabled_sources)}")
     
@@ -496,9 +506,85 @@ class NewsFetcher:
         
         return keywords
     
+    def fetch_reddit_news(self, symbol: str) -> List[Dict]:
+        """
+        Fetch news from Reddit (free, no API key needed for public data)
+        Uses Reddit's public JSON API
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC/USD')
+        
+        Returns:
+            List of news articles from Reddit
+        """
+        if not self.reddit_enabled:
+            return []
+        
+        try:
+            symbol_keywords = self._extract_symbol_keywords(symbol)
+            base = symbol.split('/')[0].upper() if '/' in symbol else symbol.upper()
+            
+            # Reddit subreddits for crypto/forex news
+            subreddits = []
+            if base in ['BTC', 'ETH', 'SOL'] or 'CRYPTO' in symbol.upper():
+                subreddits = ['cryptocurrency', 'CryptoCurrency', 'Bitcoin', 'ethereum', 'solana']
+            elif '/' in symbol:
+                subreddits = ['Forex', 'forex', 'investing', 'stocks']
+            else:
+                subreddits = ['investing', 'stocks', 'StockMarket']
+            
+            all_articles = []
+            
+            for subreddit in subreddits[:3]:  # Limit to 3 subreddits to avoid rate limits
+                try:
+                    # Reddit JSON API (no auth needed for public data)
+                    url = f"https://www.reddit.com/r/{subreddit}/hot.json"
+                    params = {'limit': 10}
+                    headers = {'User-Agent': 'SmartTrader/1.0 (News Fetcher)'}
+                    
+                    response = requests.get(url, params=params, headers=headers, timeout=5)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    for post in data.get('data', {}).get('children', [])[:5]:  # Top 5 posts
+                        post_data = post.get('data', {})
+                        title = post_data.get('title', '')
+                        selftext = post_data.get('selftext', '')
+                        score = post_data.get('score', 0)
+                        
+                        # Filter by relevance
+                        text = (title + ' ' + selftext).lower()
+                        if any(kw.lower() in text for kw in symbol_keywords[:3]):  # Check top 3 keywords
+                            # Parse timestamp
+                            created_utc = post_data.get('created_utc', 0)
+                            published = datetime.fromtimestamp(created_utc) if created_utc else datetime.now()
+                            
+                            all_articles.append({
+                                'title': title,
+                                'content': selftext[:500],  # Limit content length
+                                'link': f"https://www.reddit.com{post_data.get('permalink', '')}",
+                                'published': published,
+                                'source': f"Reddit: r/{subreddit}",
+                                'score': score  # Reddit upvotes as relevance indicator
+                            })
+                    
+                    time.sleep(0.5)  # Rate limiting
+                    
+                except Exception as e:
+                    # Silently fail - Reddit is optional
+                    continue
+            
+            if all_articles:
+                print(f"NewsFetcher: Reddit returned {len(all_articles)} articles")
+            return all_articles
+            
+        except Exception as e:
+            # Reddit is optional, don't log errors
+            return []
+    
     def fetch_news_for_symbol(self, symbol: str, force_refresh: bool = False) -> List[Dict]:
         """
-        Fetch news for a specific trading symbol
+        Fetch news for a specific trading symbol with improved caching
         
         Args:
             symbol: Trading symbol (e.g., 'BTC/USD', 'EUR/USD')
@@ -510,7 +596,15 @@ class NewsFetcher:
         symbol_keywords = self._extract_symbol_keywords(symbol)
         print(f"NewsFetcher: Fetching news for {symbol} with keywords: {symbol_keywords[:5]}...")
         
-        # Check if we need to refresh
+        # Check per-symbol cache first (more efficient)
+        if not force_refresh and symbol in self.symbol_cache:
+            cached_articles, cache_time = self.symbol_cache[symbol]
+            time_since_cache = (datetime.now() - cache_time).total_seconds() / 60
+            if time_since_cache < self.cache_ttl_minutes:
+                print(f"NewsFetcher: Returning {len(cached_articles)} cached articles for {symbol} (cached {time_since_cache:.1f} min ago)")
+                return cached_articles
+        
+        # Check global cache as fallback
         if not force_refresh and self.last_fetch_time:
             time_since_fetch = (datetime.now() - self.last_fetch_time).total_seconds()
             if time_since_fetch < (self.update_frequency_minutes * 60):
@@ -518,34 +612,61 @@ class NewsFetcher:
                 cached_filtered = [n for n in self.cached_news 
                        if any(kw.lower() in (n['title'] + ' ' + n.get('content', '')).lower()
                             for kw in symbol_keywords)]
-                print(f"NewsFetcher: Returning {len(cached_filtered)} cached articles for {symbol}")
-                return cached_filtered
+                if cached_filtered:
+                    print(f"NewsFetcher: Returning {len(cached_filtered)} cached articles for {symbol}")
+                    return cached_filtered
         
-        # Fetch fresh news from multiple sources
+        # Fetch fresh news from multiple sources (prioritize free sources)
         print(f"NewsFetcher: Fetching fresh news from multiple sources...")
         all_news = []
         
-        # 1. Try NewsAPI first (most reliable, good coverage)
-        if self.newsapi_enabled:
-            newsapi_articles = self.fetch_newsapi(symbol)
-            all_news.extend(newsapi_articles)
-            time.sleep(0.5)  # Rate limiting
-        
-        # 2. Try CryptoCompare for crypto symbols (free, crypto-specific)
+        # Priority 1: Free sources (no API key needed)
+        # 1a. CryptoCompare for crypto symbols (free, crypto-specific, reliable)
         if '/' in symbol and self.cryptocompare_enabled:
-            crypto_articles = self.fetch_cryptocompare(symbol)
-            all_news.extend(crypto_articles)
-            time.sleep(0.5)
+            try:
+                crypto_articles = self.fetch_cryptocompare(symbol)
+                all_news.extend(crypto_articles)
+                time.sleep(0.3)  # Rate limiting
+            except Exception as e:
+                print(f"NewsFetcher: CryptoCompare error (non-critical): {e}")
         
-        # 3. Try Alpha Vantage (if enabled and has API key)
+        # 1b. Reddit (free, good for sentiment, no API key)
+        if self.reddit_enabled:
+            try:
+                reddit_articles = self.fetch_reddit_news(symbol)
+                all_news.extend(reddit_articles)
+                time.sleep(0.3)
+            except Exception as e:
+                # Reddit is optional, don't log
+                pass
+        
+        # Priority 2: API sources (if configured)
+        # 2a. NewsAPI (requires API key, free tier: 100 requests/day)
+        if self.newsapi_enabled:
+            try:
+                newsapi_articles = self.fetch_newsapi(symbol)
+                all_news.extend(newsapi_articles)
+                time.sleep(0.5)  # Rate limiting
+            except Exception as e:
+                print(f"NewsFetcher: NewsAPI error (non-critical): {e}")
+        
+        # 2b. Alpha Vantage (if enabled and has API key)
         if self.alphavantage_enabled:
-            av_articles = self.fetch_alphavantage_news(symbol)
-            all_news.extend(av_articles)
-            time.sleep(0.5)
+            try:
+                av_articles = self.fetch_alphavantage_news(symbol)
+                all_news.extend(av_articles)
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"NewsFetcher: Alpha Vantage error (non-critical): {e}")
         
-        # 4. Fallback to RSS feeds
-        rss_articles = self.fetch_rss_feeds(symbol)
-        all_news.extend(rss_articles)
+        # Priority 3: RSS feeds (fallback, less reliable)
+        # Only fetch RSS if we don't have enough articles yet
+        if len(all_news) < 5:
+            try:
+                rss_articles = self.fetch_rss_feeds(symbol)
+                all_news.extend(rss_articles)
+            except Exception as e:
+                print(f"NewsFetcher: RSS feeds error (non-critical): {e}")
         
         # Remove duplicates (by title similarity)
         unique_news = self._deduplicate_articles(all_news)
@@ -574,6 +695,15 @@ class NewsFetcher:
                         break
         
         print(f"NewsFetcher: Found {len(filtered_news)} relevant articles for {symbol}")
+        
+        # Update per-symbol cache
+        self.symbol_cache[symbol] = (filtered_news, datetime.now())
+        
+        # Clean old cache entries (older than 1 hour)
+        cutoff_time = datetime.now() - timedelta(hours=1)
+        self.symbol_cache = {k: v for k, v in self.symbol_cache.items() 
+                            if v[1] > cutoff_time}
+        
         return filtered_news
     
     def extract_stock_symbols_from_news(self, news_articles: List[Dict]) -> Dict[str, int]:
