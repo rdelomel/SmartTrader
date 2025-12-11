@@ -80,11 +80,13 @@ class OANDABroker(BaseBroker):
             # Clamp dates to current time to avoid future date requests
             now_utc = datetime.now(timezone.utc)
             
-            # Safety check: if system clock seems wrong (year > 2024), use a reasonable max date
-            # This handles cases where system clock is set incorrectly
-            max_reasonable_date = datetime(2024, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
-            if now_utc.year > 2024:
-                print(f"Warning: System clock shows year {now_utc.year}. Using 2024-12-31 as maximum date.")
+            # Safety check: if system clock seems wrong (year > current year + 1), use a reasonable max date
+            # This handles cases where system clock is set incorrectly, but allow current year
+            current_year = datetime.now().year
+            max_reasonable_year = current_year + 1  # Allow up to next year
+            if now_utc.year > max_reasonable_year:
+                print(f"Warning: System clock shows year {now_utc.year} (expected <= {max_reasonable_year}). Using {current_year}-12-31 as maximum date.")
+                max_reasonable_date = datetime(current_year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
                 now_utc = max_reasonable_date
             
             # Ensure dates are timezone-aware
@@ -104,12 +106,13 @@ class OANDABroker(BaseBroker):
                 end_date = now_utc
             
             # Additional safety: ensure dates aren't unreasonably far in the future
-            if start_date.year > 2024:
-                print(f"Warning: start_date year {start_date.year} seems incorrect. Using 2024-11-01.")
-                start_date = datetime(2024, 11, 1, tzinfo=timezone.utc)
-            if end_date and end_date.year > 2024:
-                print(f"Warning: end_date year {end_date.year} seems incorrect. Using 2024-12-31.")
-                end_date = max_reasonable_date
+            current_year = datetime.now().year
+            if start_date.year > current_year + 1:
+                print(f"Warning: start_date year {start_date.year} seems incorrect. Using {current_year}-11-01.")
+                start_date = datetime(current_year, 11, 1, tzinfo=timezone.utc)
+            if end_date and end_date.year > current_year + 1:
+                print(f"Warning: end_date year {end_date.year} seems incorrect. Using {current_year}-12-31.")
+                end_date = datetime(current_year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
             
             # Ensure start_date is before end_date
             if start_date >= end_date:

@@ -174,7 +174,24 @@ class CircuitBreaker:
             should_reset = False
             reset_reason = ""
             
-            if hasattr(self, 'peak_equity_time') and self.peak_equity_time:
+            # AGGRESSIVE RESET: If drawdown is extremely high (>20%), always reset regardless of age
+            # This handles cases where peak equity was set incorrectly or from a previous run
+            if current_drawdown > 20.0:
+                should_reset = True
+                reset_reason = f"extreme drawdown ({current_drawdown:.2f}%) - likely stale or incorrect peak equity"
+            elif current_drawdown > 10.0:
+                # High drawdown (>10%) - reset if peak is more than 6 hours old
+                if hasattr(self, 'peak_equity_time') and self.peak_equity_time:
+                    hours_since_peak = (timestamp - self.peak_equity_time).total_seconds() / 3600
+                    if hours_since_peak > 6:
+                        should_reset = True
+                        reset_reason = f"high drawdown ({current_drawdown:.2f}%) with stale peak ({hours_since_peak:.1f} hours old)"
+                else:
+                    # No timestamp - assume stale
+                    should_reset = True
+                    reset_reason = f"high drawdown ({current_drawdown:.2f}%) with peak having no timestamp (stale)"
+            
+            if not should_reset and hasattr(self, 'peak_equity_time') and self.peak_equity_time:
                 days_since_peak = (timestamp - self.peak_equity_time).total_seconds() / 86400
                 
                 # Aggressive reset: If drawdown exceeds max AND peak is stale (even slightly), reset it
@@ -193,7 +210,7 @@ class CircuitBreaker:
                 elif current_drawdown < 5.0 and current_equity >= self.peak_equity * 0.95:
                     should_reset = True
                     reset_reason = "account recovered to within 5% of peak"
-            else:
+            elif not should_reset:
                 # No peak_equity_time set - likely stale peak from before this feature
                 # If drawdown is high, reset it to allow trading
                 if current_drawdown >= self.max_drawdown:

@@ -1176,8 +1176,30 @@ class TradingAgent:
             # Update aggregated performance tracker and circuit breaker (for backward compatibility)
             if self.performance_tracker:
                 self.performance_tracker.update_equity(account_balance)
-                if self.risk_agent.circuit_breaker:
-                    self.risk_agent.circuit_breaker.update_equity(account_balance)
+            
+            # Update circuit breaker with current equity
+            # IMPORTANT: Initialize peak equity if not set (first run or after reset)
+            if self.risk_agent and self.risk_agent.circuit_breaker:
+                cb = self.risk_agent.circuit_breaker
+                cb.update_equity(account_balance)
+                # If peak equity is None or very different from current, initialize it
+                if cb.peak_equity is None:
+                    cb.reset_peak_equity(account_balance)
+                    print(f"  Circuit Breaker: Initialized peak equity to ${account_balance:,.2f}")
+                elif cb.peak_equity > 0 and abs(cb.peak_equity - account_balance) / cb.peak_equity > 0.5:  # More than 50% difference
+                    # Peak equity seems incorrect (likely from previous run), reset it
+                    print(f"  Circuit Breaker: Peak equity (${cb.peak_equity:,.2f}) differs significantly from current (${account_balance:,.2f}). Resetting...")
+                    cb.reset_peak_equity(account_balance)
+            
+            # Also update per-broker circuit breakers
+            for broker_name, cb in self.circuit_breakers.items():
+                if cb:
+                    cb.update_equity(account_balance)
+                    # Initialize peak equity if not set
+                    if cb.peak_equity is None:
+                        cb.reset_peak_equity(account_balance)
+                    elif cb.peak_equity > 0 and abs(cb.peak_equity - account_balance) / cb.peak_equity > 0.5:
+                        cb.reset_peak_equity(account_balance)
             
             # Use position size from orchestrator (already calculated with regime adjustments)
             position_info = decision.get('position_size', {})
