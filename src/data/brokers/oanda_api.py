@@ -402,29 +402,19 @@ class OANDABroker(BaseBroker):
             
             response = self.session.post(url, json=order_data)
             
-            # OANDA returns 200 (OK) or 201 (Created) for successful orders
-            # 201 means the order was successfully created and may be filled immediately
-            is_success = response.status_code in [200, 201]
-            
             # Parse response data
             try:
                 data = response.json()
             except:
                 data = {}
             
-            # Check if response contains an error (even with 200/201 status)
-            error_data = data if not is_success else {}
-            error_msg = data.get('errorMessage', '') if not is_success else None
-            error_code = data.get('errorCode', '') if not is_success else None
-            
-            # Also check for orderRejectTransaction which indicates rejection
+            # Check if order was rejected (orderRejectTransaction indicates rejection)
             if 'orderRejectTransaction' in data:
-                is_success = False
+                # Order was rejected
                 error_data = data
                 error_msg = data.get('errorMessage', 'Order was rejected')
                 error_code = data.get('errorCode', 'ORDER_REJECTED')
-            
-            if not is_success:
+                
                 # Log detailed error information
                 print(f"  ❌ OANDA API Error ({response.status_code}): {error_code}")
                 print(f"     Error Message: {error_msg}")
@@ -445,13 +435,38 @@ class OANDABroker(BaseBroker):
                 return {
                     'order_id': None,
                     'status': OrderStatus.REJECTED,
-                    'error': f"{response.status_code} {error_code}: {error_msg}" if error_msg else f"HTTP {response.status_code}",
+                    'error': f"{response.status_code} {error_code}: {error_msg}",
                     'error_details': error_data
                 }
             
-            # Success - order was created/filled
+            # Check for HTTP error status codes (4xx, 5xx) - but NOT 201 (which is success)
+            if response.status_code >= 400 and response.status_code != 201:
+                # HTTP error status (but 201 is success, so exclude it)
+                error_data = data if data else {'error': response.text}
+                error_msg = data.get('errorMessage', data.get('error', f'HTTP {response.status_code}'))
+                error_code = data.get('errorCode', f'HTTP_{response.status_code}')
+                
+                print(f"  ❌ OANDA API Error ({response.status_code}): {error_code}")
+                print(f"     Error Message: {error_msg}")
+                print(f"     Full error response: {error_data}")
+                
+                return {
+                    'order_id': None,
+                    'status': OrderStatus.REJECTED,
+                    'error': f"{response.status_code} {error_code}: {error_msg}",
+                    'error_details': error_data
+                }
+            
+            # Success - OANDA returns 200 (OK) or 201 (Created) for successful orders
+            # 201 means the order was successfully created and may be filled immediately
+            # Check if we have orderCreateTransaction or orderFillTransaction (success indicators)
+            has_order_create = 'orderCreateTransaction' in data
+            has_order_fill = 'orderFillTransaction' in data
+            
             if response.status_code == 201:
                 print(f"  ✅ Order created successfully (HTTP 201)")
+            elif response.status_code == 200:
+                print(f"  ✅ Order processed successfully (HTTP 200)")
             
             # Extract order information - OANDA may return orderFillTransaction (filled immediately)
             # or orderCreateTransaction (pending) in the response
