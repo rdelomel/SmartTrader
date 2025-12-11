@@ -19,7 +19,7 @@ class TechnicalAnalystAgent(BaseAgent):
     """Technical analysis agent using indicators and ML models"""
     
     def __init__(self, config: Optional[Dict] = None, strategies: Optional[List] = None,
-                 ml_model=None, lstm_model=None, storage=None):
+                 ml_model=None, lstm_model=None, storage=None, performance_tracker=None):
         """
         Initialize technical analyst agent
         
@@ -29,12 +29,14 @@ class TechnicalAnalystAgent(BaseAgent):
             ml_model: ML model instance
             lstm_model: LSTM model instance
             storage: DataStorage instance for saving predictions
+            performance_tracker: PerformanceTracker instance for dynamic model weighting (optional)
         """
         super().__init__("TechnicalAnalyst", config)
         self.strategies = strategies or []
         self.ml_model = ml_model
         self.lstm_model = lstm_model
         self.storage = storage
+        self.performance_tracker = performance_tracker
         self.indicators = TechnicalIndicators()
         self.pattern_recognizer = ChartPatternRecognizer()
         self.feature_engineer = None  # Will be set if needed
@@ -140,10 +142,31 @@ class TechnicalAnalystAgent(BaseAgent):
                 if ml_signal:
                     base_weight = self.config.get('ml_weight', 0.3)
                     
-                    # Dynamic weighting based on recent performance (if available)
-                    # TODO: Implement model performance tracking
-                    # For now, use base weight
-                    performance_bonus = 0.0  # Will be implemented with performance tracker
+                    # Dynamic weighting based on recent performance
+                    # Adjust weight based on overall trading performance as proxy for model performance
+                    performance_bonus = 0.0
+                    if self.performance_tracker:
+                        try:
+                            metrics = self.performance_tracker.calculate_metrics()
+                            sharpe = metrics.get('sharpe_ratio', 0.0)
+                            win_rate = metrics.get('win_rate', 0.0)
+                            
+                            # Performance-based adjustment:
+                            # - If Sharpe > 1.0 and win rate > 50%: boost weight by up to 20%
+                            # - If Sharpe < 0.5 or win rate < 40%: reduce weight by up to 20%
+                            if sharpe > 1.0 and win_rate > 50:
+                                # Good performance: boost weight
+                                performance_bonus = min(0.20, (sharpe - 1.0) * 0.1 + (win_rate - 50) * 0.002)
+                            elif sharpe < 0.5 or win_rate < 40:
+                                # Poor performance: reduce weight
+                                performance_bonus = max(-0.20, -(0.5 - sharpe) * 0.1 - (40 - win_rate) * 0.002)
+                            
+                            if abs(performance_bonus) > 0.01:
+                                print(f"    📊 Performance-based ML weight adjustment: {performance_bonus*100:+.1f}% (Sharpe: {sharpe:.2f}, Win Rate: {win_rate:.1f}%)")
+                        except Exception as e:
+                            # Silently fail - performance tracking is optional
+                            pass
+                    
                     effective_weight = base_weight * (1.0 + performance_bonus)
                     
                     # Cap confidence to prevent dominance (already done in aggregation, but log it)
@@ -166,8 +189,31 @@ class TechnicalAnalystAgent(BaseAgent):
                 if lstm_signal:
                     base_weight = self.config.get('lstm_weight', 0.15)
                     
-                    # Dynamic weighting based on recent performance (if available)
-                    performance_bonus = 0.0  # Will be implemented with performance tracker
+                    # Dynamic weighting based on recent performance
+                    # Adjust weight based on overall trading performance as proxy for model performance
+                    performance_bonus = 0.0
+                    if self.performance_tracker:
+                        try:
+                            metrics = self.performance_tracker.calculate_metrics()
+                            sharpe = metrics.get('sharpe_ratio', 0.0)
+                            win_rate = metrics.get('win_rate', 0.0)
+                            
+                            # Performance-based adjustment:
+                            # - If Sharpe > 1.0 and win rate > 50%: boost weight by up to 20%
+                            # - If Sharpe < 0.5 or win rate < 40%: reduce weight by up to 20%
+                            if sharpe > 1.0 and win_rate > 50:
+                                # Good performance: boost weight
+                                performance_bonus = min(0.20, (sharpe - 1.0) * 0.1 + (win_rate - 50) * 0.002)
+                            elif sharpe < 0.5 or win_rate < 40:
+                                # Poor performance: reduce weight
+                                performance_bonus = max(-0.20, -(0.5 - sharpe) * 0.1 - (40 - win_rate) * 0.002)
+                            
+                            if abs(performance_bonus) > 0.01:
+                                print(f"    📊 Performance-based LSTM weight adjustment: {performance_bonus*100:+.1f}% (Sharpe: {sharpe:.2f}, Win Rate: {win_rate:.1f}%)")
+                        except Exception as e:
+                            # Silently fail - performance tracking is optional
+                            pass
+                    
                     effective_weight = base_weight * (1.0 + performance_bonus)
                     
                     signals.append(lstm_signal)

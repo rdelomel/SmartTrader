@@ -239,7 +239,8 @@ class TradingAgent:
                 strategies=self.strategies,
                 ml_model=self.ml_model,
                 lstm_model=self.lstm_model,
-                storage=self.storage
+                storage=self.storage,
+                performance_tracker=self.performance_tracker
             )
             
             self.sentiment_agent = SentimentAgent(
