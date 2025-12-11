@@ -535,6 +535,9 @@ class OrchestratorAgent(BaseAgent):
         Perform weighted voting on agent signals
         
         Formula: Final Signal = W_Tech * S_Tech + W_Sent * S_Sent + W_Fund * S_Fund
+        
+        Note: agent_weights from regime agent are MULTIPLIERS, not absolute weights.
+        They should be multiplied by base_weights to get final weights.
         """
         if not agent_signals:
             return {
@@ -544,7 +547,7 @@ class OrchestratorAgent(BaseAgent):
                 'reason': 'No agent signals available'
             }
         
-        # Base weights (if not provided by regime agent)
+        # Base weights (normalized to sum to 1.0)
         base_weights = {
             'technical': 0.30,
             'sentiment': 0.20,
@@ -553,14 +556,40 @@ class OrchestratorAgent(BaseAgent):
             'pattern_forecaster': 0.15
         }
         
+        # Filter out agents with zero confidence (they're not contributing)
+        # This fixes the fundamental agent issue
+        filtered_signals = {}
+        for agent_name, signal in agent_signals.items():
+            confidence = signal.get('confidence', 0.0)
+            # Only include if confidence > 0.05 (5% minimum)
+            if confidence > 0.05 or signal['signal'] != Signal.HOLD:
+                filtered_signals[agent_name] = signal
+            else:
+                print(f"    {agent_name}: EXCLUDED (confidence={confidence:.3f} too low)")
+        
+        if not filtered_signals:
+            return {
+                'signal': Signal.HOLD,
+                'confidence': 0.0,
+                'weighted_score': 0.0,
+                'reason': 'No valid agent signals (all have zero confidence)'
+            }
+        
         weighted_score = 0.0
         total_weight = 0.0
         signal_details = []
         
         print(f"  Weighted Voting Calculation:")
-        for agent_name, signal in agent_signals.items():
-            # Get weight (regime-adjusted or base)
-            weight = agent_weights.get(agent_name, base_weights.get(agent_name, 0.33))
+        for agent_name, signal in filtered_signals.items():
+            # Get base weight
+            base_weight = base_weights.get(agent_name, 0.0)
+            
+            # Get regime multiplier (if provided, otherwise 1.0)
+            # Regime agent returns multipliers like 1.2, 0.8, etc.
+            regime_multiplier = agent_weights.get(agent_name, 1.0)
+            
+            # Final weight = base_weight * regime_multiplier
+            weight = base_weight * regime_multiplier
             
             # Convert signal to numeric (direction: BUY=+1, SELL=-1, HOLD=0)
             signal_val = 0
@@ -572,40 +601,36 @@ class OrchestratorAgent(BaseAgent):
             # Get confidence (strength of signal)
             confidence = signal.get('confidence', 0.5)
             
-            # Get score (may be directional, but we use signal_val for direction)
-            score = signal.get('score', 0.0)
-            
-            # FIXED: Use signal_val for direction, confidence for strength
-            # Don't multiply by score if it's already directional - use absolute value for magnitude
-            # If score is provided and non-zero, use it to scale confidence
-            # Otherwise, use confidence directly
-            if abs(score) > 0.01:
-                # Score is provided - use it to scale, but signal_val determines direction
-                # Take absolute value of score for magnitude, apply signal_val for direction
-                contribution = signal_val * abs(score) * confidence * weight
-            else:
-                # No score or score is 0 - use confidence directly with signal direction
-                contribution = signal_val * confidence * weight
+            # Calculate contribution: direction * confidence * weight
+            # signal_val provides direction (+1 BUY, -1 SELL, 0 HOLD)
+            # confidence provides strength (0.0 to 1.0)
+            # weight provides importance (base * regime_multiplier)
+            contribution = signal_val * confidence * weight
             
             weighted_score += contribution
             total_weight += weight
             
-            print(f"    {agent_name}: {signal['signal'].name}, signal_val={signal_val}, score={score:.3f}, confidence={confidence:.3f}, weight={weight:.2f}, contribution={contribution:.4f}")
+            print(f"    {agent_name}: {signal['signal'].name}, signal_val={signal_val}, confidence={confidence:.3f}, base_weight={base_weight:.2f}, multiplier={regime_multiplier:.2f}, final_weight={weight:.3f}, contribution={contribution:.4f}")
             
             signal_details.append({
                 'agent': agent_name,
                 'signal': signal['signal'],
-                'score': score,
                 'confidence': confidence,
-                'weight': weight,
+                'base_weight': base_weight,
+                'regime_multiplier': regime_multiplier,
+                'final_weight': weight,
                 'contribution': contribution
             })
         
-        # Normalize by total weight
+        # Normalize by total weight to get final score in [-1, 1] range
         if total_weight > 0:
-            weighted_score /= total_weight
-        print(f"  Total weighted_score (before normalization): {weighted_score * total_weight:.4f}")
-        print(f"  Normalized weighted_score: {weighted_score:.4f}")
+            normalized_score = weighted_score / total_weight
+        else:
+            normalized_score = 0.0
+        
+        print(f"  Total contribution: {weighted_score:.4f}")
+        print(f"  Total weight: {total_weight:.4f}")
+        print(f"  Normalized weighted_score: {normalized_score:.4f} (range: -1 to +1)")
         
         # Determine final signal
         # In aggressive mode, use lower threshold for weighted voting too
@@ -613,15 +638,16 @@ class OrchestratorAgent(BaseAgent):
         threshold = self.min_confidence * 0.7 if aggressive else self.min_confidence
         
         # Calculate confidence based on agreeing agents (not weighted_score which is directional)
-        # Count signals
-        buy_count = sum(1 for s in agent_signals.values() if s['signal'] == Signal.BUY)
-        sell_count = sum(1 for s in agent_signals.values() if s['signal'] == Signal.SELL)
-        hold_count = sum(1 for s in agent_signals.values() if s['signal'] == Signal.HOLD)
+        # Count signals from filtered_signals (excludes zero-confidence agents)
+        buy_count = sum(1 for s in filtered_signals.values() if s['signal'] == Signal.BUY)
+        sell_count = sum(1 for s in filtered_signals.values() if s['signal'] == Signal.SELL)
+        hold_count = sum(1 for s in filtered_signals.values() if s['signal'] == Signal.HOLD)
         
-        # Determine final signal direction
-        if weighted_score > threshold:
+        # Determine final signal direction using normalized score
+        # Use normalized_score instead of weighted_score for threshold comparison
+        if normalized_score > threshold:
             final_signal = Signal.BUY
-        elif weighted_score < -threshold:
+        elif normalized_score < -threshold:
             final_signal = Signal.SELL
         else:
             final_signal = Signal.HOLD
@@ -688,8 +714,8 @@ class OrchestratorAgent(BaseAgent):
         return {
             'signal': final_signal,
             'confidence': confidence,
-            'weighted_score': weighted_score,
-            'reason': f'Weighted voting: {weighted_score:.3f} (BUY:{buy_count}, SELL:{sell_count}, HOLD:{hold_count})',
+            'weighted_score': normalized_score,  # Return normalized score
+            'reason': f'Weighted voting: {normalized_score:.3f} (BUY:{buy_count}, SELL:{sell_count}, HOLD:{hold_count})',
             'signal_details': signal_details
         }
     
@@ -698,6 +724,7 @@ class OrchestratorAgent(BaseAgent):
         Check consensus among agents
         
         Returns consensus information
+        Note: HOLD signals are NOT counted as agreeing - they're neutral
         """
         if not agent_signals:
             return {
@@ -710,14 +737,29 @@ class OrchestratorAgent(BaseAgent):
         final_signal_val = final_signal['signal']
         agreeing = []
         disagreeing = []
+        neutral = []  # HOLD signals
         
-        for agent_name, signal in agent_signals.items():
-            if signal['signal'] == final_signal_val:
+        # Filter out agents with zero confidence
+        valid_agents = {name: sig for name, sig in agent_signals.items() 
+                       if sig.get('confidence', 0.0) > 0.05}
+        
+        for agent_name, signal in valid_agents.items():
+            agent_signal = signal['signal']
+            if agent_signal == Signal.HOLD:
+                neutral.append(agent_name)
+            elif agent_signal == final_signal_val:
                 agreeing.append(agent_name)
-            elif signal['signal'] != Signal.HOLD:
+            else:
                 disagreeing.append(agent_name)
         
-        consensus_strength = len(agreeing) / len(agent_signals) if agent_signals else 0.0
+        # Consensus strength = agreeing / (agreeing + disagreeing)
+        # HOLD signals don't count for or against consensus
+        total_voting = len(agreeing) + len(disagreeing)
+        if total_voting > 0:
+            consensus_strength = len(agreeing) / total_voting
+        else:
+            consensus_strength = 0.0  # All agents are HOLD
+        
         has_consensus = consensus_strength >= self.consensus_threshold
         
         return {
@@ -725,6 +767,8 @@ class OrchestratorAgent(BaseAgent):
             'consensus_strength': consensus_strength,
             'agreeing_agents': agreeing,
             'disagreeing_agents': disagreeing,
-            'total_agents': len(agent_signals)
+            'neutral_agents': neutral,
+            'total_agents': len(agent_signals),
+            'voting_agents': total_voting
         }
 
