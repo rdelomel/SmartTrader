@@ -317,9 +317,14 @@ class OANDABroker(BaseBroker):
                     'instrument': oanda_symbol,
                     'units': str(units),
                     'type': 'MARKET' if order_type == OrderType.MARKET else 'LIMIT',
-                    'timeInForce': 'FOK'  # Fill or Kill
+                    # OANDA doesn't support FOK for all instruments. Use GTC (Good Till Cancelled) for market orders
+                    # or remove timeInForce entirely for market orders (it's optional)
+                    'timeInForce': 'GTC' if order_type == OrderType.LIMIT else None
                 }
             }
+            # Remove timeInForce if None (OANDA doesn't require it for market orders)
+            if order_data['order']['timeInForce'] is None:
+                del order_data['order']['timeInForce']
             
             if order_type == OrderType.LIMIT:
                 if price is None:
@@ -331,7 +336,32 @@ class OANDABroker(BaseBroker):
             if take_profit:
                 order_data['order']['takeProfitOnFill'] = {'price': str(take_profit)}
             
+            # Log order data for debugging
+            print(f"  📤 OANDA Order Data: {order_data}")
+            
             response = self.session.post(url, json=order_data)
+            
+            # Better error handling - capture OANDA's error response
+            if response.status_code != 200:
+                error_data = {}
+                try:
+                    error_data = response.json()
+                except:
+                    error_data = {'error': response.text}
+                
+                error_msg = error_data.get('errorMessage', error_data.get('error', str(response.status_code)))
+                error_code = error_data.get('errorCode', 'UNKNOWN')
+                print(f"  ❌ OANDA API Error ({response.status_code}): {error_code} - {error_msg}")
+                if 'errorMessage' in error_data:
+                    print(f"     Full error response: {error_data}")
+                
+                return {
+                    'order_id': None,
+                    'status': OrderStatus.REJECTED,
+                    'error': f"{response.status_code} {error_code}: {error_msg}",
+                    'error_details': error_data
+                }
+            
             response.raise_for_status()
             data = response.json()
             
@@ -345,6 +375,23 @@ class OANDABroker(BaseBroker):
                 'side': side.value,
                 'price': float(order_info.get('price', price or 0.0)),
                 'timestamp': datetime.now()
+            }
+        except requests.exceptions.HTTPError as e:
+            # Handle HTTP errors with better error messages
+            error_msg = str(e)
+            try:
+                if hasattr(e.response, 'json'):
+                    error_data = e.response.json()
+                    error_msg = error_data.get('errorMessage', error_data.get('error', error_msg))
+                    print(f"  ❌ OANDA HTTP Error: {error_msg}")
+                    print(f"     Full error response: {error_data}")
+            except:
+                pass
+            print(f"Error placing order on OANDA: {error_msg}")
+            return {
+                'order_id': None,
+                'status': OrderStatus.REJECTED,
+                'error': error_msg
             }
         except Exception as e:
             print(f"Error placing order on OANDA: {e}")

@@ -236,6 +236,35 @@ class OrchestratorAgent(BaseAgent):
             # Get entry price and stop loss from technical signal
             entry_price = data['close'].iloc[-1]
             stop_loss = agent_signals.get('technical', {}).get('stop_loss')
+            take_profit = agent_signals.get('technical', {}).get('take_profit')
+            
+            # CRITICAL FIX: Validate stop_loss and take_profit match the signal direction
+            # Pattern detection may provide values for the pattern's direction, but the final
+            # signal might be different. We must ensure stop_loss/take_profit are correct.
+            is_buy = final_signal['signal'] == Signal.BUY
+            
+            if stop_loss:
+                # Validate stop_loss is correct for the signal direction
+                if is_buy and stop_loss > entry_price:
+                    # Stop loss is above entry for a BUY - this is wrong!
+                    print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is above entry ${entry_price:.2f} for BUY signal. Recalculating...")
+                    stop_loss = None  # Force recalculation
+                elif not is_buy and stop_loss < entry_price:
+                    # Stop loss is below entry for a SELL - this is wrong!
+                    print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is below entry ${entry_price:.2f} for SELL signal. Recalculating...")
+                    stop_loss = None  # Force recalculation
+            
+            if take_profit:
+                # Validate take_profit is correct for the signal direction
+                if is_buy and take_profit < entry_price:
+                    # Take profit is below entry for a BUY - this is wrong!
+                    print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is below entry ${entry_price:.2f} for BUY signal. Recalculating...")
+                    take_profit = None  # Force recalculation
+                elif not is_buy and take_profit > entry_price:
+                    # Take profit is above entry for a SELL - this is wrong!
+                    print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is above entry ${entry_price:.2f} for SELL signal. Recalculating...")
+                    take_profit = None  # Force recalculation
+            
             if not stop_loss:
                 # Default stop loss - ensure it's always set
                 from ..indicators.technical import TechnicalIndicators
@@ -249,21 +278,20 @@ class OrchestratorAgent(BaseAgent):
                 
                 stop_distance = atr_value * 2.0  # 2x ATR
                 
-                if final_signal['signal'] == Signal.BUY:
+                if is_buy:
                     stop_loss = entry_price - stop_distance
                 else:  # SELL
                     stop_loss = entry_price + stop_distance
                 
                 # Ensure stop loss is valid (not negative for buy, reasonable for sell)
-                if final_signal['signal'] == Signal.BUY:
+                if is_buy:
                     stop_loss = max(stop_loss, entry_price * 0.95)  # Max 5% loss
                 else:
                     stop_loss = min(stop_loss, entry_price * 1.05)  # Max 5% loss for shorts
                 
                 print(f"  ✅ Calculated default stop loss: ${stop_loss:.2f} (ATR-based, {abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
             
-            # Calculate take profit if not provided by technical agent
-            take_profit = agent_signals.get('technical', {}).get('take_profit')
+            # Calculate take profit if not provided by technical agent or if it was invalid
             if not take_profit and stop_loss is not None:
                 # Calculate take profit based on risk/reward ratio
                 # Default 2.0 (1:2) - minimum for most profitable strategies
