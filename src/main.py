@@ -1413,6 +1413,27 @@ class TradingAgent:
             order_status = order_result.get('status', OrderStatus.REJECTED if error_msg else OrderStatus.PENDING)
             
             if order_id:
+                # CRITICAL: Ensure stop_loss and take_profit are never None before storing
+                # If they're None, calculate emergency fallbacks
+                if stop_loss is None:
+                    print(f"  ❌ CRITICAL: Stop loss is None! Calculating emergency fallback...")
+                    if side == OrderSide.BUY:
+                        stop_loss = entry_price * 0.98  # 2% stop loss for longs
+                    else:
+                        stop_loss = entry_price * 1.02  # 2% stop loss for shorts
+                    print(f"  ⚠️  EMERGENCY: Set stop loss to ${stop_loss:.2f} (2% default)")
+                
+                if take_profit is None and stop_loss is not None:
+                    print(f"  ⚠️  WARNING: Take profit is None! Calculating emergency fallback...")
+                    risk = abs(entry_price - stop_loss)
+                    if risk > 0:
+                        reward = risk * 2.0  # Default 1:2 risk/reward
+                        if side == OrderSide.BUY:
+                            take_profit = entry_price + reward
+                        else:
+                            take_profit = entry_price - reward
+                        print(f"  ⚠️  EMERGENCY: Set take profit to ${take_profit:.2f} (1:2 R/R)")
+                
                 # Successful order - store as open trade
                 trade_data = {
                     'trade_id': order_id,
@@ -1960,7 +1981,8 @@ class TradingAgent:
     
     def _update_missing_take_profits(self, open_trades: List[Dict]):
         """
-        Calculate and update take profit for existing positions that don't have it
+        Calculate and update stop_loss and take_profit for existing positions that don't have them
+        Uses proper ATR-based calculations (same as orchestrator) instead of emergency fallbacks
         
         Args:
             open_trades: List of open trade dictionaries from database
@@ -1970,10 +1992,12 @@ class TradingAgent:
         
         # Get risk/reward ratio from config
         orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
-        risk_reward_ratio = orchestrator_config.get('risk_reward_ratio', 3.0)  # Default 1:3 (updated from 2.0)
+        risk_reward_ratio = orchestrator_config.get('risk_reward_ratio', 2.0)  # Default 1:2
         
-        updated_count = 0
-        print(f"\n[STARTUP] Checking {len(open_trades)} open positions for missing take profit...")
+        updated_sl_count = 0
+        updated_tp_count = 0
+        print(f"\n[STARTUP] Checking {len(open_trades)} open positions for missing stop_loss/take_profit...")
+        print(f"  Using ATR-based calculations with {risk_reward_ratio:.1f}:1 risk/reward ratio")
         
         for trade in open_trades:
             trade_id = trade.get('trade_id') or trade.get('id')  # Try both fields
@@ -1983,48 +2007,143 @@ class TradingAgent:
             stop_loss = trade.get('stop_loss')
             take_profit = trade.get('take_profit')
             
-            # Skip if already has take profit
-            if take_profit is not None and take_profit > 0:
+            if not entry_price or entry_price <= 0:
+                print(f"  ⚠️  {symbol}: Skipping (invalid entry_price: {entry_price})")
                 continue
             
-            # Need both entry_price and stop_loss to calculate take profit
-            if not entry_price or not stop_loss or entry_price <= 0 or stop_loss <= 0:
-                continue
+            # Determine asset class from symbol or broker
+            asset_class = 'crypto'  # Default
+            if '/' in symbol:
+                # Try to determine from symbol format
+                if any(fx in symbol for fx in ['EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
+                    asset_class = 'forex'
+                elif any(metal in symbol for metal in ['XAU', 'XAG']):
+                    asset_class = 'commodities'
             
-            # Calculate risk (distance from entry to stop loss)
-            risk = abs(entry_price - stop_loss)
+            # CRITICAL: Calculate proper stop_loss using ATR (same as orchestrator)
+            if not stop_loss or stop_loss <= 0:
+                try:
+                    # Fetch market data for ATR calculation
+                    print(f"  📊 {symbol}: Fetching market data for ATR-based stop loss calculation...")
+                    # Get broker for asset class
+                    if asset_class == 'forex':
+                        broker = self.brokers.get('forex') or self.brokers.get('oanda')
+                    elif asset_class == 'commodities':
+                        broker = self.brokers.get('forex') or self.brokers.get('oanda')  # OANDA handles commodities
+                    elif asset_class == 'crypto':
+                        broker = self.brokers.get('crypto') or self.brokers.get('stocks')  # Alpaca handles crypto
+                    else:
+                        broker = self.brokers.get(asset_class) or self.brokers.get('stocks')
+                    
+                    if not broker:
+                        print(f"  ⚠️  {symbol}: No broker available for {asset_class}, using emergency fallback")
+                        # Emergency fallback
+                        if side == 'buy':
+                            stop_loss = entry_price * 0.98
+                        else:
+                            stop_loss = entry_price * 1.02
+                    else:
+                        # Fetch recent data for ATR calculation
+                        try:
+                            data = broker.get_historical_data(symbol, timeframe='1h', limit=50)
+                            if data is None or data.empty or len(data) < 14:
+                                raise ValueError("Insufficient data for ATR")
+                            
+                            # Preprocess data
+                            data = self.preprocessor.preprocess(data)
+                            
+                            # Calculate ATR-based stop loss (same logic as orchestrator)
+                            atr = self.indicators.atr(data)
+                            atr_value = atr.iloc[-1] if not atr.empty else entry_price * 0.02
+                            
+                            # Ensure ATR value is reasonable (at least 0.5% of price)
+                            min_stop_distance = entry_price * 0.005  # 0.5% minimum
+                            atr_value = max(atr_value, min_stop_distance)
+                            
+                            stop_distance = atr_value * 2.0  # 2x ATR
+                            
+                            is_buy = side == 'buy'
+                            if is_buy:
+                                stop_loss = entry_price - stop_distance
+                            else:  # sell
+                                stop_loss = entry_price + stop_distance
+                            
+                            # Ensure stop loss is valid (not negative for buy, reasonable for sell)
+                            if is_buy:
+                                stop_loss = max(stop_loss, entry_price * 0.95)  # Max 5% loss
+                            else:
+                                stop_loss = min(stop_loss, entry_price * 1.05)  # Max 5% loss for shorts
+                            
+                            risk_pct = abs((entry_price - stop_loss) / entry_price * 100)
+                            print(f"  ✅ {symbol}: Calculated ATR-based stop loss ${stop_loss:.2f} ({risk_pct:.2f}% risk)")
+                            
+                        except Exception as data_error:
+                            print(f"  ⚠️  {symbol}: Could not fetch data for ATR calculation: {data_error}")
+                            print(f"  ⚠️  {symbol}: Using emergency fallback (2% stop loss)")
+                            # Emergency fallback if data fetch fails
+                            if side == 'buy':
+                                stop_loss = entry_price * 0.98
+                            else:
+                                stop_loss = entry_price * 1.02
+                    
+                    # Update database
+                    try:
+                        success = self.storage.update_trade(trade_id, {'stop_loss': stop_loss})
+                        if success:
+                            updated_sl_count += 1
+                            if stop_loss == entry_price * 0.98 or stop_loss == entry_price * 1.02:
+                                print(f"  ⚠️  {symbol}: Set emergency stop loss ${stop_loss:.2f} (2% default)")
+                            else:
+                                print(f"  ✅ {symbol}: Updated stop loss to ${stop_loss:.2f}")
+                        else:
+                            print(f"  ⚠️  {symbol}: Failed to update stop loss in database")
+                    except Exception as e:
+                        print(f"  ❌ {symbol}: Error updating stop loss: {e}")
+                        
+                except Exception as e:
+                    print(f"  ❌ {symbol}: Error calculating stop loss: {e}")
+                    # Final emergency fallback
+                    if side == 'buy':
+                        stop_loss = entry_price * 0.98
+                    else:
+                        stop_loss = entry_price * 1.02
+                    try:
+                        self.storage.update_trade(trade_id, {'stop_loss': stop_loss})
+                        updated_sl_count += 1
+                        print(f"  ⚠️  {symbol}: Set emergency stop loss ${stop_loss:.2f} (2% default)")
+                    except:
+                        pass
             
-            # Only calculate if we have meaningful risk
-            if risk <= 0:
-                print(f"  ⚠️  {symbol}: Cannot calculate take profit (stop loss equals entry price)")
-                continue
-            
-            # Calculate reward based on risk/reward ratio
-            reward = risk * risk_reward_ratio
-            
-            # Set take profit
-            if side == 'buy':
-                calculated_tp = entry_price + reward
-            else:  # sell
-                calculated_tp = entry_price - reward
-            
-            # Update trade in database
-            # update_trade filters by trade_id (order_id from broker), not database primary key
-            trade_id = trade.get('trade_id')
-            if trade_id:
-                success = self.storage.update_trade(trade_id, {'take_profit': calculated_tp})
-                if success:
-                    updated_count += 1
-                    print(f"  ✅ {symbol} ({side}): Added take profit ${calculated_tp:.2f} (Risk/Reward: 1:{risk_reward_ratio:.1f})")
+            # Now calculate take profit if missing (using proper risk/reward ratio)
+            if (take_profit is None or take_profit <= 0) and stop_loss and stop_loss > 0:
+                # Calculate risk (distance from entry to stop loss)
+                risk = abs(entry_price - stop_loss)
+                
+                # Only calculate if we have meaningful risk
+                if risk > 0:
+                    # Calculate reward based on risk/reward ratio
+                    reward = risk * risk_reward_ratio
+                    
+                    # Set take profit
+                    if side == 'buy':
+                        take_profit = entry_price + reward
+                    else:  # sell
+                        take_profit = entry_price - reward
+                    
+                    # Update database
+                    try:
+                        success = self.storage.update_trade(trade_id, {'take_profit': take_profit})
+                        if success:
+                            updated_tp_count += 1
+                            print(f"  ✅ {symbol}: Set take profit ${take_profit:.2f} (1:{risk_reward_ratio:.1f} R/R)")
+                        else:
+                            print(f"  ⚠️  {symbol}: Failed to update take profit")
+                    except Exception as e:
+                        print(f"  ❌ {symbol}: Error updating take profit: {e}")
                 else:
-                    print(f"  ⚠️  {symbol}: Failed to update take profit in database (trade_id: {trade_id})")
-            else:
-                print(f"  ⚠️  {symbol}: No trade_id (order_id) found, cannot update take profit")
+                    print(f"  ⚠️  {symbol}: Cannot calculate take profit (stop loss equals entry price)")
         
-        if updated_count > 0:
-            print(f"✅ Updated take profit for {updated_count} position(s)")
-        else:
-            print(f"ℹ️  All positions already have take profit or cannot be calculated")
+        print(f"\n[STARTUP] ✅ Updated {updated_sl_count} positions with stop_loss, {updated_tp_count} positions with take_profit")
     
     def _sync_positions_from_brokers(self):
         """Sync open positions and orders from all brokers to local database"""

@@ -238,113 +238,164 @@ class OrchestratorAgent(BaseAgent):
         position_size_info = None
         stop_loss = None
         take_profit = None
-        if self.risk_agent and final_signal['signal'] != Signal.HOLD:
-            # Get entry price and stop loss from technical signal
-            entry_price = data['close'].iloc[-1]
-            stop_loss = agent_signals.get('technical', {}).get('stop_loss')
-            take_profit = agent_signals.get('technical', {}).get('take_profit')
-            
-            # CRITICAL FIX: Validate stop_loss and take_profit match the signal direction
-            # Pattern detection may provide values for the pattern's direction, but the final
-            # signal might be different. We must ensure stop_loss/take_profit are correct.
-            is_buy = final_signal['signal'] == Signal.BUY
-            
-            if stop_loss:
-                # Validate stop_loss is correct for the signal direction
-                if is_buy and stop_loss > entry_price:
-                    # Stop loss is above entry for a BUY - this is wrong!
-                    print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is above entry ${entry_price:.2f} for BUY signal. Recalculating...")
-                    stop_loss = None  # Force recalculation
-                elif not is_buy and stop_loss < entry_price:
-                    # Stop loss is below entry for a SELL - this is wrong!
-                    print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is below entry ${entry_price:.2f} for SELL signal. Recalculating...")
-                    stop_loss = None  # Force recalculation
-            
-            if take_profit:
-                # Validate take_profit is correct for the signal direction
-                if is_buy and take_profit < entry_price:
-                    # Take profit is below entry for a BUY - this is wrong!
-                    print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is below entry ${entry_price:.2f} for BUY signal. Recalculating...")
-                    take_profit = None  # Force recalculation
-                elif not is_buy and take_profit > entry_price:
-                    # Take profit is above entry for a SELL - this is wrong!
-                    print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is above entry ${entry_price:.2f} for SELL signal. Recalculating...")
-                    take_profit = None  # Force recalculation
-            
-            if not stop_loss:
-                # Default stop loss - ensure it's always set
-                from ..indicators.technical import TechnicalIndicators
-                indicators = TechnicalIndicators()
-                atr = indicators.atr(data)
-                atr_value = atr.iloc[-1] if not atr.empty else entry_price * 0.02
+        
+        # CRITICAL FIX: Always calculate stop_loss and take_profit for non-HOLD signals
+        # Even if risk_agent is None, we must set these values for risk management
+        if final_signal['signal'] != Signal.HOLD:
+            try:
+                # Get entry price and stop loss from technical signal
+                entry_price = data['close'].iloc[-1]
+                stop_loss = agent_signals.get('technical', {}).get('stop_loss')
+                take_profit = agent_signals.get('technical', {}).get('take_profit')
                 
-                # Ensure ATR value is reasonable (at least 0.5% of price)
-                min_stop_distance = entry_price * 0.005  # 0.5% minimum
-                atr_value = max(atr_value, min_stop_distance)
+                # CRITICAL FIX: Validate stop_loss and take_profit match the signal direction
+                # Pattern detection may provide values for the pattern's direction, but the final
+                # signal might be different. We must ensure stop_loss/take_profit are correct.
+                is_buy = final_signal['signal'] == Signal.BUY
                 
-                stop_distance = atr_value * 2.0  # 2x ATR
+                if stop_loss:
+                    # Validate stop_loss is correct for the signal direction
+                    if is_buy and stop_loss > entry_price:
+                        # Stop loss is above entry for a BUY - this is wrong!
+                        print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is above entry ${entry_price:.2f} for BUY signal. Recalculating...")
+                        stop_loss = None  # Force recalculation
+                    elif not is_buy and stop_loss < entry_price:
+                        # Stop loss is below entry for a SELL - this is wrong!
+                        print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is below entry ${entry_price:.2f} for SELL signal. Recalculating...")
+                        stop_loss = None  # Force recalculation
                 
-                if is_buy:
-                    stop_loss = entry_price - stop_distance
-                else:  # SELL
-                    stop_loss = entry_price + stop_distance
+                if take_profit:
+                    # Validate take_profit is correct for the signal direction
+                    if is_buy and take_profit < entry_price:
+                        # Take profit is below entry for a BUY - this is wrong!
+                        print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is below entry ${entry_price:.2f} for BUY signal. Recalculating...")
+                        take_profit = None  # Force recalculation
+                    elif not is_buy and take_profit > entry_price:
+                        # Take profit is above entry for a SELL - this is wrong!
+                        print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is above entry ${entry_price:.2f} for SELL signal. Recalculating...")
+                        take_profit = None  # Force recalculation
                 
-                # Ensure stop loss is valid (not negative for buy, reasonable for sell)
-                if is_buy:
-                    stop_loss = max(stop_loss, entry_price * 0.95)  # Max 5% loss
-                else:
-                    stop_loss = min(stop_loss, entry_price * 1.05)  # Max 5% loss for shorts
-                
-                print(f"  ✅ Calculated default stop loss: ${stop_loss:.2f} (ATR-based, {abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
-            
-            # Calculate take profit if not provided by technical agent or if it was invalid
-            if not take_profit and stop_loss is not None:
-                # Calculate take profit based on risk/reward ratio
-                # Default 2.0 (1:2) - minimum for most profitable strategies
-                # 1:2 is the practical minimum, 1:3 is often the sweet spot
-                # Higher ratios (1:5+) require very precise entries and lower win rates
-                side_str = 'buy' if final_signal['signal'] == Signal.BUY else 'sell'
-                risk_reward_ratio = self.config.get('risk_reward_ratio', 2.0)  # Default 2.0:1 (1:2)
-                
-                # Calculate risk (distance from entry to stop loss)
-                risk = abs(entry_price - stop_loss)
-                
-                # Only calculate take profit if we have meaningful risk
-                if risk > 0:
-                    # Calculate reward based on risk/reward ratio
-                    reward = risk * risk_reward_ratio
+                if not stop_loss:
+                    # Default stop loss - ensure it's always set
+                    from ..indicators.technical import TechnicalIndicators
+                    indicators = TechnicalIndicators()
+                    atr = indicators.atr(data)
+                    atr_value = atr.iloc[-1] if not atr.empty else entry_price * 0.02
                     
-                    # Set take profit
-                    if side_str == 'buy':
-                        take_profit = entry_price + reward
-                    else:  # sell
-                        take_profit = entry_price - reward
+                    # Ensure ATR value is reasonable (at least 0.5% of price)
+                    min_stop_distance = entry_price * 0.005  # 0.5% minimum
+                    atr_value = max(atr_value, min_stop_distance)
                     
-                    print(f"  Calculated Take Profit: ${take_profit:.2f} (Risk/Reward: 1:{risk_reward_ratio:.1f})")
-                    print(f"  Risk: ${risk:.2f} ({risk/entry_price*100:.2f}%) | Reward: ${reward:.2f} ({reward/entry_price*100:.2f}%)")
-                else:
-                    print(f"  ⚠️  Warning: Stop loss equals entry price (${entry_price:.2f}), cannot calculate take profit")
-            
-            position_size_info = self.risk_agent.calculate_position_size(
-                account_balance, entry_price, stop_loss, data, current_regime,
-                performance_tracker=self.performance_tracker
-            )
-            
-            # Adjust position size based on DRL action if available
-            drl_action = final_signal.get('drl_action', None)
-            drl_confidence = final_signal.get('drl_confidence', 0.5)
-            if drl_action is not None and self.use_drl:
-                # Enhanced DRL position adjustment:
-                # - Minimum 50% position even with low action
-                # - Scales to 100% with high confidence and action
-                # Formula: quantity * (0.5 + 0.5 * abs(action)) * (0.7 + 0.3 * confidence)
-                action_multiplier = 0.5 + 0.5 * abs(drl_action)
-                confidence_multiplier = 0.7 + 0.3 * drl_confidence
-                drl_adjustment = action_multiplier * confidence_multiplier
+                    stop_distance = atr_value * 2.0  # 2x ATR
+                    
+                    if is_buy:
+                        stop_loss = entry_price - stop_distance
+                    else:  # SELL
+                        stop_loss = entry_price + stop_distance
+                    
+                    # Ensure stop loss is valid (not negative for buy, reasonable for sell)
+                    if is_buy:
+                        stop_loss = max(stop_loss, entry_price * 0.95)  # Max 5% loss
+                    else:
+                        stop_loss = min(stop_loss, entry_price * 1.05)  # Max 5% loss for shorts
+                    
+                    print(f"  ✅ Calculated default stop loss: ${stop_loss:.2f} (ATR-based, {abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
                 
-                position_size_info['drl_adjustment'] = drl_adjustment
-                position_size_info['quantity'] = position_size_info.get('quantity', 0) * drl_adjustment
-                position_size_info['value'] = position_size_info.get('quantity', 0) * entry_price
+                # Calculate take profit if not provided by technical agent or if it was invalid
+                if not take_profit and stop_loss is not None:
+                    # Calculate take profit based on risk/reward ratio
+                    # Default 2.0 (1:2) - minimum for most profitable strategies
+                    # 1:2 is the practical minimum, 1:3 is often the sweet spot
+                    # Higher ratios (1:5+) require very precise entries and lower win rates
+                    side_str = 'buy' if final_signal['signal'] == Signal.BUY else 'sell'
+                    risk_reward_ratio = self.config.get('risk_reward_ratio', 2.0)  # Default 2.0:1 (1:2)
+                    
+                    # Calculate risk (distance from entry to stop loss)
+                    risk = abs(entry_price - stop_loss)
+                    
+                    # Only calculate take profit if we have meaningful risk
+                    if risk > 0:
+                        # Calculate reward based on risk/reward ratio
+                        reward = risk * risk_reward_ratio
+                        
+                        # Set take profit
+                        if side_str == 'buy':
+                            take_profit = entry_price + reward
+                        else:  # sell
+                            take_profit = entry_price - reward
+                        
+                        print(f"  Calculated Take Profit: ${take_profit:.2f} (Risk/Reward: 1:{risk_reward_ratio:.1f})")
+                        print(f"  Risk: ${risk:.2f} ({risk/entry_price*100:.2f}%) | Reward: ${reward:.2f} ({reward/entry_price*100:.2f}%)")
+                    else:
+                        print(f"  ⚠️  Warning: Stop loss equals entry price (${entry_price:.2f}), cannot calculate take profit")
+                
+                # CRITICAL: Final safety check - ensure stop_loss is NEVER None for non-HOLD signals
+                if stop_loss is None:
+                    print(f"  ❌ CRITICAL ERROR: Stop loss is None after all calculations! Using emergency fallback...")
+                    entry_price = data['close'].iloc[-1]
+                    is_buy = final_signal['signal'] == Signal.BUY
+                    # Emergency fallback: 2% stop loss
+                    if is_buy:
+                        stop_loss = entry_price * 0.98
+                    else:
+                        stop_loss = entry_price * 1.02
+                    print(f"  ⚠️  EMERGENCY: Set fallback stop loss: ${stop_loss:.2f} (2% default)")
+                
+                # CRITICAL: Final safety check - ensure take_profit is set if stop_loss exists
+                if take_profit is None and stop_loss is not None:
+                    print(f"  ⚠️  WARNING: Take profit is None but stop_loss exists. Calculating emergency take profit...")
+                    entry_price = data['close'].iloc[-1]
+                    is_buy = final_signal['signal'] == Signal.BUY
+                    risk = abs(entry_price - stop_loss)
+                    if risk > 0:
+                        reward = risk * 2.0  # Default 1:2 risk/reward
+                        if is_buy:
+                            take_profit = entry_price + reward
+                        else:
+                            take_profit = entry_price - reward
+                        print(f"  ⚠️  EMERGENCY: Set fallback take profit: ${take_profit:.2f} (1:2 R/R)")
+                
+            except Exception as e:
+                # If calculation fails, use emergency fallbacks
+                print(f"  ❌ ERROR calculating stop_loss/take_profit: {e}")
+                print(f"  ⚠️  Using emergency fallback values...")
+                entry_price = data['close'].iloc[-1]
+                is_buy = final_signal['signal'] == Signal.BUY
+                if stop_loss is None:
+                    stop_loss = entry_price * 0.98 if is_buy else entry_price * 1.02
+                if take_profit is None and stop_loss is not None:
+                    risk = abs(entry_price - stop_loss)
+                    if risk > 0:
+                        reward = risk * 2.0
+                        take_profit = entry_price + reward if is_buy else entry_price - reward
+            
+            # Position sizing (only if risk_agent exists)
+            if self.risk_agent:
+                try:
+                    entry_price = data['close'].iloc[-1]
+                    position_size_info = self.risk_agent.calculate_position_size(
+                        account_balance, entry_price, stop_loss, data, current_regime,
+                        performance_tracker=self.performance_tracker
+                    )
+                    
+                    # Adjust position size based on DRL action if available
+                    drl_action = final_signal.get('drl_action', None)
+                    drl_confidence = final_signal.get('drl_confidence', 0.5)
+                    if drl_action is not None and self.use_drl:
+                        # Enhanced DRL position adjustment:
+                        # - Minimum 50% position even with low action
+                        # - Scales to 100% with high confidence and action
+                        # Formula: quantity * (0.5 + 0.5 * abs(action)) * (0.7 + 0.3 * confidence)
+                        action_multiplier = 0.5 + 0.5 * abs(drl_action)
+                        confidence_multiplier = 0.7 + 0.3 * drl_confidence
+                        drl_adjustment = action_multiplier * confidence_multiplier
+                        
+                        position_size_info['drl_adjustment'] = drl_adjustment
+                        position_size_info['quantity'] = position_size_info.get('quantity', 0) * drl_adjustment
+                        position_size_info['value'] = position_size_info.get('quantity', 0) * entry_price
+                except Exception as e:
+                    print(f"  ⚠️  Error calculating position size: {e}")
+                    position_size_info = None
         
         self._update_timestamp()
         
