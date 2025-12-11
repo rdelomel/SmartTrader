@@ -353,20 +353,43 @@ class OANDABroker(BaseBroker):
             if order_data['order']['timeInForce'] is None:
                 del order_data['order']['timeInForce']
             
+            # Get price precision for this instrument (needed for limit orders and stop/take profit)
+            # OANDA requires different precision for different instruments:
+            # - Forex pairs (EUR/USD, GBP/USD, etc.): 5 decimal places
+            # - Precious metals (XAU/USD, XAG/USD): 2-3 decimal places
+            # - JPY pairs (USD/JPY): 3 decimal places
+            def get_price_precision(instrument: str) -> int:
+                """Get the number of decimal places required for price formatting"""
+                instrument_upper = instrument.upper()
+                if 'XAU' in instrument_upper or 'XAG' in instrument_upper:
+                    # Precious metals: 2-3 decimal places (use 3 for safety)
+                    return 3
+                elif 'JPY' in instrument_upper:
+                    # JPY pairs: 3 decimal places
+                    return 3
+                else:
+                    # Forex pairs: 5 decimal places
+                    return 5
+            
+            price_precision = get_price_precision(oanda_symbol)
+            
             if order_type == OrderType.LIMIT:
                 if price is None:
                     raise ValueError("Price required for LIMIT orders")
-                order_data['order']['price'] = str(price)
+                # Format limit price with correct precision
+                price_rounded = round(price, price_precision)
+                order_data['order']['price'] = f"{price_rounded:.{price_precision}f}".rstrip('0').rstrip('.')
             
-            # Format stop loss and take profit with appropriate precision
-            # OANDA requires prices to be formatted correctly based on instrument
+            # Format stop loss and take profit with instrument-specific precision
             if stop_loss:
-                # Format price with up to 5 decimal places (OANDA standard)
-                stop_loss_price = f"{stop_loss:.5f}".rstrip('0').rstrip('.')
+                # Round to appropriate precision and format
+                stop_loss_rounded = round(stop_loss, price_precision)
+                stop_loss_price = f"{stop_loss_rounded:.{price_precision}f}".rstrip('0').rstrip('.')
                 order_data['order']['stopLossOnFill'] = {'price': stop_loss_price}
             if take_profit:
-                # Format price with up to 5 decimal places (OANDA standard)
-                take_profit_price = f"{take_profit:.5f}".rstrip('0').rstrip('.')
+                # Round to appropriate precision and format
+                take_profit_rounded = round(take_profit, price_precision)
+                take_profit_price = f"{take_profit_rounded:.{price_precision}f}".rstrip('0').rstrip('.')
                 order_data['order']['takeProfitOnFill'] = {'price': take_profit_price}
             
             # Log order data for debugging
