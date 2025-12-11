@@ -307,8 +307,35 @@ class OANDABroker(BaseBroker):
             # system already calculates a position quantity based on account
             # value, so we pass that through directly and only convert to int.
             units = int(round(abs(quantity)))
+            
+            # OANDA minimum and maximum order sizes:
+            # - Forex pairs: typically 1 unit minimum, 100,000 units maximum
+            # - XAU/USD (Gold): 1 oz minimum, 100,000 oz maximum
+            # - XAG/USD (Silver): 1 oz minimum, 100,000 oz maximum
+            # - Other commodities: check OANDA documentation
+            min_units = 1
+            max_units = 100000  # OANDA's typical maximum
+            
+            if 'XAU' in oanda_symbol or 'XAG' in oanda_symbol:
+                # Precious metals - ensure at least 1 oz
+                min_units = 1
+                max_units = 100000
+            elif 'USD' in oanda_symbol and '/' in oanda_symbol:
+                # Forex pairs - typically 1 unit minimum
+                min_units = 1
+                max_units = 100000
+            
+            if units < min_units:
+                print(f"  ⚠️  Warning: Order size {units} is below minimum {min_units} for {oanda_symbol}. Adjusting to minimum.")
+                units = min_units
+            
+            if units > max_units:
+                print(f"  ⚠️  Warning: Order size {units} exceeds maximum {max_units} for {oanda_symbol}. Adjusting to maximum.")
+                units = max_units
+            
             if units == 0:
-                units = 1  # ensure we send at least 1 unit
+                units = min_units  # ensure we send at least minimum units
+            
             if side == OrderSide.SELL:
                 units = -units
             
@@ -331,13 +358,24 @@ class OANDABroker(BaseBroker):
                     raise ValueError("Price required for LIMIT orders")
                 order_data['order']['price'] = str(price)
             
+            # Format stop loss and take profit with appropriate precision
+            # OANDA requires prices to be formatted correctly based on instrument
             if stop_loss:
-                order_data['order']['stopLossOnFill'] = {'price': str(stop_loss)}
+                # Format price with up to 5 decimal places (OANDA standard)
+                stop_loss_price = f"{stop_loss:.5f}".rstrip('0').rstrip('.')
+                order_data['order']['stopLossOnFill'] = {'price': stop_loss_price}
             if take_profit:
-                order_data['order']['takeProfitOnFill'] = {'price': str(take_profit)}
+                # Format price with up to 5 decimal places (OANDA standard)
+                take_profit_price = f"{take_profit:.5f}".rstrip('0').rstrip('.')
+                order_data['order']['takeProfitOnFill'] = {'price': take_profit_price}
             
             # Log order data for debugging
             print(f"  📤 OANDA Order Data: {order_data}")
+            print(f"     Instrument: {oanda_symbol}, Units: {units}, Side: {side.value}")
+            if stop_loss:
+                print(f"     Stop Loss: {stop_loss_price}")
+            if take_profit:
+                print(f"     Take Profit: {take_profit_price}")
             
             response = self.session.post(url, json=order_data)
             
@@ -349,11 +387,28 @@ class OANDABroker(BaseBroker):
                 except:
                     error_data = {'error': response.text}
                 
-                error_msg = error_data.get('errorMessage', error_data.get('error', str(response.status_code)))
-                error_code = error_data.get('errorCode', 'UNKNOWN')
-                print(f"  ❌ OANDA API Error ({response.status_code}): {error_code} - {error_msg}")
-                if 'errorMessage' in error_data:
-                    print(f"     Full error response: {error_data}")
+                # Extract error message - OANDA can return errors in different formats
+                error_msg = error_data.get('errorMessage', 
+                                         error_data.get('error', 
+                                                       error_data.get('message', 
+                                                                     str(response.status_code))))
+                error_code = error_data.get('errorCode', error_data.get('code', 'UNKNOWN'))
+                
+                # Log detailed error information
+                print(f"  ❌ OANDA API Error ({response.status_code}): {error_code}")
+                print(f"     Error Message: {error_msg}")
+                print(f"     Full error response: {error_data}")
+                print(f"     Order that was rejected: {order_data}")
+                
+                # Check for common rejection reasons
+                if 'insufficient' in error_msg.lower() or 'margin' in error_msg.lower():
+                    print(f"     💡 Suggestion: Check account balance and margin requirements")
+                elif 'size' in error_msg.lower() or 'units' in error_msg.lower():
+                    print(f"     💡 Suggestion: Order size may be too large or too small for this instrument")
+                elif 'instrument' in error_msg.lower():
+                    print(f"     💡 Suggestion: Check if instrument code '{oanda_symbol}' is correct")
+                elif 'market' in error_msg.lower() and 'closed' in error_msg.lower():
+                    print(f"     💡 Suggestion: Market may be closed for this instrument")
                 
                 return {
                     'order_id': None,
