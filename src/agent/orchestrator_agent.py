@@ -287,6 +287,7 @@ class OrchestratorAgent(BaseAgent):
                         take_profit = entry_price - reward
                     
                     print(f"  Calculated Take Profit: ${take_profit:.2f} (Risk/Reward: 1:{risk_reward_ratio:.1f})")
+                    print(f"  Risk: ${risk:.2f} ({risk/entry_price*100:.2f}%) | Reward: ${reward:.2f} ({reward/entry_price*100:.2f}%)")
                 else:
                     print(f"  ⚠️  Warning: Stop loss equals entry price (${entry_price:.2f}), cannot calculate take profit")
             

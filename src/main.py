@@ -1684,11 +1684,11 @@ class TradingAgent:
                         except Exception as e:
                             print(f"  ❌ Error setting emergency stop loss: {e}")
                     
-                    # EMERGENCY FIX: Set default take profit if missing (1:2 risk/reward)
+                    # EMERGENCY FIX: Set default take profit if missing (1:3 risk/reward - updated from 1:2)
                     if not take_profit and stop_loss:
                         risk = abs(entry_price - stop_loss)
                         if risk > 0:
-                            reward = risk * 2.0  # 1:2 risk/reward
+                            reward = risk * 3.0  # 1:3 risk/reward (updated from 2.0 to match config)
                             if side == 'buy':
                                 take_profit = entry_price + reward
                             else:  # sell
@@ -1697,7 +1697,7 @@ class TradingAgent:
                             # Update database with emergency take profit
                             try:
                                 self.storage.update_trade(trade_id, {'take_profit': take_profit})
-                                print(f"  ⚠️  EMERGENCY: Set default take profit for {symbol}: ${take_profit:.2f} (1:2 R/R)")
+                                print(f"  ⚠️  EMERGENCY: Set default take profit for {symbol}: ${take_profit:.2f} (1:3 R/R)")
                             except Exception as e:
                                 print(f"  ❌ Error setting emergency take profit: {e}")
                     
@@ -1740,25 +1740,51 @@ class TradingAgent:
                     # Debug logging for crypto positions (since they don't have bracket orders)
                     is_crypto = '/' in symbol and symbol.split('/')[0].upper() in ['BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'LINK', 'MATIC', 'AVAX', 'UNI', 'ATOM']
                     
+                    # Calculate current P&L for logging
+                    if side == 'buy':
+                        current_pnl = (current_price - entry_price) * quantity
+                        pnl_percent = ((current_price - entry_price) / entry_price) * 100
+                    else:  # sell
+                        current_pnl = (entry_price - current_price) * quantity
+                        pnl_percent = ((entry_price - current_price) / entry_price) * 100
+                    
+                    # Log position status (every check for monitoring)
+                    print(f"  📊 Position {symbol}: Price ${current_price:.2f} | Entry ${entry_price:.2f} | P&L ${current_pnl:.2f} ({pnl_percent:+.2f}%) | SL ${stop_loss:.2f if stop_loss else 'None'} | TP ${take_profit:.2f if take_profit else 'None'}")
+                    
                     if stop_loss:
                         if self.stop_loss_manager.check_stop_loss(current_price, stop_loss, side):
                             should_close = True
                             close_reason = 'stop_loss'
-                            if is_crypto:
-                                print(f"  🛑 Stop-loss triggered for {symbol}: Current ${current_price:.2f} vs Stop ${stop_loss:.2f} (Side: {side})")
+                            print(f"  🛑 STOP LOSS TRIGGERED for {symbol}:")
+                            print(f"     Current Price: ${current_price:.2f}")
+                            print(f"     Stop Loss: ${stop_loss:.2f}")
+                            print(f"     Entry Price: ${entry_price:.2f}")
+                            print(f"     Side: {side.upper()}")
+                            print(f"     Loss: ${current_pnl:.2f} ({pnl_percent:.2f}%)")
+                            print(f"     Stop loss was properly monitored and triggered")
                     
                     # Check take profit
                     if take_profit and not should_close:
                         if side == 'buy' and current_price >= take_profit:
                             should_close = True
                             close_reason = 'take_profit'
-                            if is_crypto:
-                                print(f"  🎯 Take-profit triggered for {symbol}: Current ${current_price:.2f} >= Target ${take_profit:.2f} (BUY position)")
+                            print(f"  🎯 TAKE PROFIT TRIGGERED for {symbol}:")
+                            print(f"     Current Price: ${current_price:.2f}")
+                            print(f"     Take Profit: ${take_profit:.2f}")
+                            print(f"     Entry Price: ${entry_price:.2f}")
+                            print(f"     Side: {side.upper()}")
+                            print(f"     Profit: ${current_pnl:.2f} ({pnl_percent:.2f}%)")
+                            print(f"     Take profit was properly monitored and triggered")
                         elif side == 'sell' and current_price <= take_profit:
                             should_close = True
                             close_reason = 'take_profit'
-                            if is_crypto:
-                                print(f"  🎯 Take-profit triggered for {symbol}: Current ${current_price:.2f} <= Target ${take_profit:.2f} (SELL position)")
+                            print(f"  🎯 TAKE PROFIT TRIGGERED for {symbol}:")
+                            print(f"     Current Price: ${current_price:.2f}")
+                            print(f"     Take Profit: ${take_profit:.2f}")
+                            print(f"     Entry Price: ${entry_price:.2f}")
+                            print(f"     Side: {side.upper()}")
+                            print(f"     Profit: ${current_pnl:.2f} ({pnl_percent:.2f}%)")
+                            print(f"     Take profit was properly monitored and triggered")
                     
                     # Debug logging for crypto positions (show current status)
                     if is_crypto and (stop_loss or take_profit):
@@ -1934,7 +1960,7 @@ class TradingAgent:
         
         # Get risk/reward ratio from config
         orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
-        risk_reward_ratio = orchestrator_config.get('risk_reward_ratio', 2.0)  # Default 1:2
+        risk_reward_ratio = orchestrator_config.get('risk_reward_ratio', 3.0)  # Default 1:3 (updated from 2.0)
         
         updated_count = 0
         print(f"\n[STARTUP] Checking {len(open_trades)} open positions for missing take profit...")
