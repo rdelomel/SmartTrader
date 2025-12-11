@@ -19,7 +19,7 @@ class TechnicalAnalystAgent(BaseAgent):
     """Technical analysis agent using indicators and ML models"""
     
     def __init__(self, config: Optional[Dict] = None, strategies: Optional[List] = None,
-                 ml_model=None, lstm_model=None):
+                 ml_model=None, lstm_model=None, storage=None):
         """
         Initialize technical analyst agent
         
@@ -28,11 +28,13 @@ class TechnicalAnalystAgent(BaseAgent):
             strategies: List of trading strategies
             ml_model: ML model instance
             lstm_model: LSTM model instance
+            storage: DataStorage instance for saving predictions
         """
         super().__init__("TechnicalAnalyst", config)
         self.strategies = strategies or []
         self.ml_model = ml_model
         self.lstm_model = lstm_model
+        self.storage = storage
         self.indicators = TechnicalIndicators()
         self.pattern_recognizer = ChartPatternRecognizer()
         self.feature_engineer = None  # Will be set if needed
@@ -134,7 +136,7 @@ class TechnicalAnalystAgent(BaseAgent):
         # Get ML model signal
         if self.ml_model and self.ml_model.is_trained:
             try:
-                ml_signal = self._get_ml_signal(data)
+                ml_signal = self._get_ml_signal(data, symbol)
                 if ml_signal:
                     signals.append(ml_signal)
                     weight = self.config.get('ml_weight', 0.3)
@@ -148,7 +150,7 @@ class TechnicalAnalystAgent(BaseAgent):
         # Get LSTM signal
         if self.lstm_model and self.lstm_model.is_trained:
             try:
-                lstm_signal = self._get_lstm_signal(data)
+                lstm_signal = self._get_lstm_signal(data, symbol)
                 if lstm_signal:
                     signals.append(lstm_signal)
                     weight = self.config.get('lstm_weight', 0.15)
@@ -225,7 +227,7 @@ class TechnicalAnalystAgent(BaseAgent):
         
         return result
     
-    def _get_ml_signal(self, data: pd.DataFrame) -> Optional[Dict]:
+    def _get_ml_signal(self, data: pd.DataFrame, symbol: str = None) -> Optional[Dict]:
         """Get signal from ML model"""
         if not self.feature_engineer:
             from ..indicators.feature_engineering import FeatureEngineer
@@ -239,16 +241,33 @@ class TechnicalAnalystAgent(BaseAgent):
                 return None
             
             X = df_features[feature_columns].iloc[-1:].fillna(0)
+            current_price = data['close'].iloc[-1]
             
             if self.ml_model.model_type == 'classification':
                 prediction = self.ml_model.predict(X)[0]
                 proba = self.ml_model.predict_proba(X)[0]
                 confidence = max(proba)
                 signal = Signal.BUY if prediction == 1 else Signal.SELL
+                prediction_value = float(prediction)  # 0 or 1 for classification
             else:
                 prediction = self.ml_model.predict(X)[0]
                 signal = Signal.BUY if prediction > 0 else Signal.SELL
                 confidence = min(abs(prediction) * 10, 1.0)
+                prediction_value = float(prediction)  # Regression value
+            
+            # Store prediction in database
+            if self.storage and symbol:
+                try:
+                    self.storage.store_prediction({
+                        'symbol': symbol,
+                        'timestamp': datetime.now(),
+                        'model_name': 'XGBoost_ML',
+                        'prediction': prediction_value,
+                        'confidence': confidence,
+                        'actual_price': current_price
+                    })
+                except Exception as e:
+                    print(f"  ⚠️  Warning: Could not store ML prediction: {e}")
             
             return {
                 'signal': signal,
@@ -259,7 +278,7 @@ class TechnicalAnalystAgent(BaseAgent):
             print(f"Error in ML signal: {e}")
             return None
     
-    def _get_lstm_signal(self, data: pd.DataFrame) -> Optional[Dict]:
+    def _get_lstm_signal(self, data: pd.DataFrame, symbol: str = None) -> Optional[Dict]:
         """Get signal from LSTM model"""
         if not self.feature_engineer:
             from ..indicators.feature_engineering import FeatureEngineer
@@ -273,6 +292,7 @@ class TechnicalAnalystAgent(BaseAgent):
                 return None
             
             X = df_features[feature_columns].tail(60).copy()
+            current_price = data['close'].iloc[-1]
             
             # Clean data: replace infinity and NaN
             X = X.replace([np.inf, -np.inf], np.nan)
@@ -290,6 +310,21 @@ class TechnicalAnalystAgent(BaseAgent):
             
             signal = Signal.BUY if prediction > 0 else Signal.SELL
             confidence = min(abs(prediction) * 10, 1.0)
+            prediction_value = float(prediction)
+            
+            # Store prediction in database
+            if self.storage and symbol:
+                try:
+                    self.storage.store_prediction({
+                        'symbol': symbol,
+                        'timestamp': datetime.now(),
+                        'model_name': 'LSTM',
+                        'prediction': prediction_value,
+                        'confidence': confidence,
+                        'actual_price': current_price
+                    })
+                except Exception as e:
+                    print(f"  ⚠️  Warning: Could not store LSTM prediction: {e}")
             
             return {
                 'signal': signal,

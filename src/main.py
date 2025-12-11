@@ -238,7 +238,8 @@ class TradingAgent:
                 config=self.trading_config.get('agents', {}).get('technical', {}),
                 strategies=self.strategies,
                 ml_model=self.ml_model,
-                lstm_model=self.lstm_model
+                lstm_model=self.lstm_model,
+                storage=self.storage
             )
             
             self.sentiment_agent = SentimentAgent(
