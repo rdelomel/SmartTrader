@@ -85,6 +85,12 @@ class NewsFetcher:
         # Enable Reddit as free news source (no API key needed for public data)
         self.reddit_enabled = self.config.get('reddit_enabled', True)
         
+        # Track source failures to disable consistently failing sources
+        self.source_failures = {}  # source_name -> failure_count
+        self.max_failures_before_disable = 5  # Disable after 5 consecutive failures
+        self.source_disabled_until = {}  # source_name -> datetime (temporary disable)
+        self.disable_duration_minutes = 60  # Re-enable after 60 minutes
+        
         # Log enabled sources
         enabled_sources = []
         if self.newsapi_enabled:
@@ -97,6 +103,40 @@ class NewsFetcher:
             enabled_sources.append("Reddit")
         enabled_sources.append(f"RSS ({len(self.rss_feeds)} feeds)")
         print(f"NewsFetcher: Initialized with sources: {', '.join(enabled_sources)}")
+    
+    def _is_source_disabled(self, source_name: str) -> bool:
+        """Check if a source is temporarily disabled due to repeated failures"""
+        if source_name not in self.source_disabled_until:
+            return False
+        if datetime.now() < self.source_disabled_until[source_name]:
+            return True
+        # Re-enable after timeout
+        del self.source_disabled_until[source_name]
+        self.source_failures[source_name] = 0  # Reset failure count
+        return False
+    
+    def _record_source_failure(self, source_name: str, error: Exception):
+        """Record a source failure and disable if too many failures"""
+        if source_name not in self.source_failures:
+            self.source_failures[source_name] = 0
+        self.source_failures[source_name] += 1
+        
+        # Check if we should disable this source
+        if self.source_failures[source_name] >= self.max_failures_before_disable:
+            # Disable for a period
+            self.source_disabled_until[source_name] = datetime.now() + timedelta(minutes=self.disable_duration_minutes)
+            # Only log once when disabling
+            if self.source_failures[source_name] == self.max_failures_before_disable:
+                error_msg = str(error)
+                if '401' in error_msg or 'Unauthorized' in error_msg:
+                    print(f"NewsFetcher: {source_name} disabled - API key invalid/expired. Will retry in {self.disable_duration_minutes} minutes.")
+                else:
+                    print(f"NewsFetcher: {source_name} temporarily disabled after {self.max_failures_before_disable} failures. Will retry in {self.disable_duration_minutes} minutes.")
+    
+    def _record_source_success(self, source_name: str):
+        """Reset failure count on successful fetch"""
+        if source_name in self.source_failures:
+            self.source_failures[source_name] = 0
     
     def fetch_newsapi(self, symbol: str, query: Optional[str] = None) -> List[Dict]:
         """
@@ -112,6 +152,10 @@ class NewsFetcher:
         """
         if not self.newsapi_enabled:
             return []
+        
+        source_name = "NewsAPI"
+        if self._is_source_disabled(source_name):
+            return []  # Silently skip if disabled
         
         try:
             symbol_keywords = self._extract_symbol_keywords(symbol)
@@ -155,10 +199,17 @@ class NewsFetcher:
                 })
             
             print(f"NewsFetcher: NewsAPI returned {len(articles)} articles")
+            self._record_source_success(source_name)
             return articles
             
         except Exception as e:
-            print(f"NewsFetcher: Error fetching from NewsAPI: {e}")
+            error_msg = str(e)
+            # Only log non-401 errors (401 means invalid key, we'll disable it)
+            if '401' not in error_msg and 'Unauthorized' not in error_msg:
+                # Only log unexpected errors, suppress common network issues
+                if 'timeout' not in error_msg.lower() and 'connection' not in error_msg.lower():
+                    print(f"NewsFetcher: Error fetching from NewsAPI: {e}")
+            self._record_source_failure(source_name, e)
             return []
     
     def fetch_cryptocompare(self, symbol: str) -> List[Dict]:
@@ -174,6 +225,10 @@ class NewsFetcher:
         """
         if not self.cryptocompare_enabled or '/' not in symbol:
             return []
+        
+        source_name = "CryptoCompare"
+        if self._is_source_disabled(source_name):
+            return []  # Silently skip if disabled
         
         try:
             base = symbol.split('/')[0].upper()
@@ -191,9 +246,31 @@ class NewsFetcher:
             data = response.json()
             
             articles = []
-            for article in data.get('Data', [])[:10]:  # Limit to recent
+            # Fix: Ensure Data is a list before slicing
+            data_list = data.get('Data', [])
+            if not isinstance(data_list, list):
+                # If Data is not a list, try to handle it
+                if isinstance(data_list, dict):
+                    # Sometimes API returns dict instead of list
+                    data_list = list(data_list.values()) if data_list else []
+                else:
+                    data_list = []
+            
+            # Limit to recent articles
+            for article in data_list[:10]:
+                # Ensure article is a dict
+                if not isinstance(article, dict):
+                    continue
+                    
                 # Parse published time (Unix timestamp)
-                published = datetime.fromtimestamp(article.get('published_on', 0))
+                published_on = article.get('published_on', 0)
+                try:
+                    if isinstance(published_on, (int, float)) and published_on > 0:
+                        published = datetime.fromtimestamp(published_on)
+                    else:
+                        published = datetime.now()
+                except (ValueError, OSError, TypeError):
+                    published = datetime.now()
                 
                 articles.append({
                     'title': article.get('title', ''),
@@ -204,10 +281,15 @@ class NewsFetcher:
                 })
             
             print(f"NewsFetcher: CryptoCompare returned {len(articles)} articles")
+            self._record_source_success(source_name)
             return articles
             
         except Exception as e:
-            print(f"NewsFetcher: Error fetching from CryptoCompare: {e}")
+            error_msg = str(e)
+            # Suppress timeout errors (common and expected)
+            if 'timeout' not in error_msg.lower() and 'unhashable' not in error_msg.lower():
+                print(f"NewsFetcher: Error fetching from CryptoCompare: {e}")
+            self._record_source_failure(source_name, e)
             return []
     
     def fetch_alphavantage_news(self, symbol: str) -> List[Dict]:
@@ -223,6 +305,10 @@ class NewsFetcher:
         """
         if not self.alphavantage_enabled:
             return []
+        
+        source_name = "Alpha Vantage"
+        if self._is_source_disabled(source_name):
+            return []  # Silently skip if disabled
         
         try:
             # Clean symbol for Alpha Vantage (remove /USD etc for stocks)
@@ -260,10 +346,16 @@ class NewsFetcher:
                 })
             
             print(f"NewsFetcher: Alpha Vantage returned {len(articles)} articles")
+            self._record_source_success(source_name)
             return articles
             
         except Exception as e:
-            print(f"NewsFetcher: Error fetching from Alpha Vantage: {e}")
+            error_msg = str(e)
+            # Suppress common errors (timeouts, connection issues)
+            if 'timeout' not in error_msg.lower() and 'connection' not in error_msg.lower():
+                # Only log unexpected errors
+                pass  # Don't log - too noisy
+            self._record_source_failure(source_name, e)
             return []
     
     def _sanitize_xml(self, xml_content: str) -> str:
@@ -359,12 +451,13 @@ class NewsFetcher:
                                 status_code = e.response.status_code
                             
                             # Suppress common HTTP errors (400, 403, 404, 526 are common for RSS feeds)
-                            if status_code in [400, 403, 404, 526]:
+                            # Also suppress timeout errors (common network issue)
+                            if status_code in [400, 403, 404, 526] or 'timeout' in error_msg.lower():
                                 # Silently fail - these are expected for many RSS feeds
                                 pass
-                            elif 'getaddrinfo' not in error_msg and 'SSL' not in error_msg and 'timeout' not in error_msg.lower():
-                                # Log other unexpected errors
-                                print(f"NewsFetcher: Network error fetching {feed_url}: {error_msg[:100]}")
+                            elif 'getaddrinfo' not in error_msg and 'SSL' not in error_msg.lower():
+                                # Only log truly unexpected errors (suppress common network issues)
+                                pass  # Don't log - too noisy
                             failed_feeds.append(feed_url)
                             continue
                     except Exception as e:
@@ -381,8 +474,8 @@ class NewsFetcher:
                             continue
                         else:
                             error_msg = str(e)
-                            if 'getaddrinfo' not in error_msg and 'SSL' not in error_msg and 'timeout' not in error_msg.lower():
-                                print(f"NewsFetcher: Error parsing RSS feed {feed_url}: {error_msg[:100]}")
+                            # Suppress all RSS feed errors - they're common and expected
+                            # RSS feeds are fallback sources, failures are normal
                             failed_feeds.append(feed_url)
                             continue
                 
@@ -459,7 +552,8 @@ class NewsFetcher:
                 time.sleep(0.5)
                 
             except Exception as e:
-                print(f"NewsFetcher: Error fetching RSS feed {feed_url}: {e}")
+                # Suppress RSS feed errors - they're common and expected
+                # RSS feeds are fallback sources, failures are normal
                 failed_feeds.append(feed_url)
                 continue
         
@@ -628,7 +722,8 @@ class NewsFetcher:
                 all_news.extend(crypto_articles)
                 time.sleep(0.3)  # Rate limiting
             except Exception as e:
-                print(f"NewsFetcher: CryptoCompare error (non-critical): {e}")
+                # Suppress errors - already handled in fetch_cryptocompare
+                pass
         
         # 1b. Reddit (free, good for sentiment, no API key)
         if self.reddit_enabled:
@@ -648,7 +743,8 @@ class NewsFetcher:
                 all_news.extend(newsapi_articles)
                 time.sleep(0.5)  # Rate limiting
             except Exception as e:
-                print(f"NewsFetcher: NewsAPI error (non-critical): {e}")
+                # Suppress errors - already handled in fetch_newsapi
+                pass
         
         # 2b. Alpha Vantage (if enabled and has API key)
         if self.alphavantage_enabled:

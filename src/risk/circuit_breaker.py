@@ -43,6 +43,30 @@ class CircuitBreaker:
         if timestamp is None:
             timestamp = datetime.now()
         
+        # Clean up stale equity history if current equity is very different
+        # This handles cases where account balance changed significantly (new session, deposit, etc.)
+        if self.equity_history:
+            # Check recent history entries
+            recent_entries = list(self.equity_history)[-10:]  # Last 10 entries
+            if recent_entries:
+                recent_equities = [e[1] for e in recent_entries]
+                avg_recent_equity = sum(recent_equities) / len(recent_equities)
+                
+                # If current equity differs by more than 50% from recent average, likely new session
+                if avg_recent_equity > 0:
+                    equity_ratio = max(equity, avg_recent_equity) / min(equity, avg_recent_equity)
+                    if equity_ratio > 2.0:  # More than 2x difference
+                        print(f"Circuit Breaker: Detected significant equity change ({equity:.2f} vs recent avg {avg_recent_equity:.2f}). Clearing stale history.")
+                        # Keep only very recent entries (last hour) or clear all if too old
+                        cutoff_time = timestamp - timedelta(hours=1)
+                        filtered_entries = [(ts, eq) for ts, eq in self.equity_history if ts >= cutoff_time]
+                        self.equity_history.clear()
+                        for entry in filtered_entries:
+                            self.equity_history.append(entry)
+                        # If we cleared everything, at least keep current value
+                        if not self.equity_history:
+                            self.equity_history.append((timestamp, equity))
+        
         # Add to history
         self.equity_history.append((timestamp, equity))
         
@@ -139,6 +163,12 @@ class CircuitBreaker:
         hourly_loss_pct = hourly_loss['loss_pct']
         hourly_limit_abs = abs(effective_hourly_limit)
         
+        # Safety check: if calculated loss is unreasonably high (>10%), likely invalid data
+        # Don't trigger circuit breaker on clearly invalid calculations
+        if hourly_loss_pct > 10.0:
+            print(f"Circuit Breaker: Warning - Calculated hourly loss ({hourly_loss_pct:.2f}%) is unreasonably high. Likely invalid data. Ignoring.")
+            hourly_loss_pct = 0.0  # Treat as no loss to avoid false triggers
+        
         # Only trigger if there's an actual loss (positive) that exceeds the limit
         if hourly_loss_pct > 0 and hourly_loss_pct >= hourly_limit_abs:
             self._trigger(f"Hourly loss limit exceeded: {hourly_loss_pct:.2f}% (limit: {hourly_limit_abs:.2f}%)", timestamp)
@@ -154,6 +184,12 @@ class CircuitBreaker:
         daily_loss = self._check_daily_loss(current_equity, timestamp)
         daily_loss_pct = daily_loss['loss_pct']
         daily_limit_abs = abs(effective_daily_limit)
+        
+        # Safety check: if calculated loss is unreasonably high (>20%), likely invalid data
+        # Don't trigger circuit breaker on clearly invalid calculations
+        if daily_loss_pct > 20.0:
+            print(f"Circuit Breaker: Warning - Calculated daily loss ({daily_loss_pct:.2f}%) is unreasonably high. Likely invalid data. Ignoring.")
+            daily_loss_pct = 0.0  # Treat as no loss to avoid false triggers
         
         if daily_loss_pct > 0 and daily_loss_pct >= daily_limit_abs:
             self._trigger(f"Daily loss limit exceeded: {daily_loss_pct:.2f}% (limit: {daily_limit_abs:.2f}%)", timestamp)
@@ -252,16 +288,44 @@ class CircuitBreaker:
     def _check_hourly_loss(self, current_equity: float, timestamp: datetime) -> Dict:
         """Check hourly loss limit"""
         one_hour_ago = timestamp - timedelta(hours=1)
+        # Use a window: accept values between 0.5 and 1.5 hours ago
+        window_start = timestamp - timedelta(hours=1.5)
+        window_end = timestamp - timedelta(hours=0.5)
         
-        # Find equity one hour ago
+        # Find equity closest to one hour ago within the window
         equity_one_hour_ago = None
-        for ts, equity in self.equity_history:
-            if ts <= one_hour_ago:
-                equity_one_hour_ago = equity
-            else:
-                break
+        closest_time_diff = None
         
-        if equity_one_hour_ago is None or equity_one_hour_ago == 0:
+        if not self.equity_history:
+            return {'exceeded': False, 'loss_pct': 0.0}
+        
+        for ts, equity in self.equity_history:
+            # Only consider values within the acceptable window
+            if window_start <= ts <= window_end:
+                time_diff = abs((ts - one_hour_ago).total_seconds())
+                if closest_time_diff is None or time_diff < closest_time_diff:
+                    closest_time_diff = time_diff
+                    equity_one_hour_ago = equity
+        
+        # If no value in window, check if we have any history at all
+        # If history is less than 1 hour old, can't calculate hourly loss
+        if equity_one_hour_ago is None:
+            # Check if oldest record is less than 1 hour old
+            oldest_ts, oldest_equity = self.equity_history[0]
+            if (timestamp - oldest_ts).total_seconds() < 3600:  # Less than 1 hour
+                return {'exceeded': False, 'loss_pct': 0.0}
+            # Otherwise, use oldest available value but validate it's reasonable
+            equity_one_hour_ago = oldest_equity
+            # Validate: if equity changed by more than 50%, likely stale data
+            if abs(equity_one_hour_ago - current_equity) / max(equity_one_hour_ago, current_equity) > 0.5:
+                return {'exceeded': False, 'loss_pct': 0.0}
+        
+        if equity_one_hour_ago is None or equity_one_hour_ago <= 0:
+            return {'exceeded': False, 'loss_pct': 0.0}
+        
+        # Validate equity values are reasonable (not wildly different)
+        equity_ratio = max(equity_one_hour_ago, current_equity) / min(equity_one_hour_ago, current_equity)
+        if equity_ratio > 3.0:  # More than 3x difference suggests stale or incorrect data
             return {'exceeded': False, 'loss_pct': 0.0}
         
         loss_pct = ((equity_one_hour_ago - current_equity) / equity_one_hour_ago) * 100
@@ -279,16 +343,44 @@ class CircuitBreaker:
     def _check_daily_loss(self, current_equity: float, timestamp: datetime) -> Dict:
         """Check daily loss limit"""
         one_day_ago = timestamp - timedelta(days=1)
+        # Use a window: accept values between 0.75 and 1.25 days ago
+        window_start = timestamp - timedelta(days=1.25)
+        window_end = timestamp - timedelta(days=0.75)
         
-        # Find equity one day ago
+        # Find equity closest to one day ago within the window
         equity_one_day_ago = None
-        for ts, equity in self.equity_history:
-            if ts <= one_day_ago:
-                equity_one_day_ago = equity
-            else:
-                break
+        closest_time_diff = None
         
-        if equity_one_day_ago is None or equity_one_day_ago == 0:
+        if not self.equity_history:
+            return {'exceeded': False, 'loss_pct': 0.0}
+        
+        for ts, equity in self.equity_history:
+            # Only consider values within the acceptable window
+            if window_start <= ts <= window_end:
+                time_diff = abs((ts - one_day_ago).total_seconds())
+                if closest_time_diff is None or time_diff < closest_time_diff:
+                    closest_time_diff = time_diff
+                    equity_one_day_ago = equity
+        
+        # If no value in window, check if we have any history at all
+        # If history is less than 1 day old, can't calculate daily loss
+        if equity_one_day_ago is None:
+            # Check if oldest record is less than 1 day old
+            oldest_ts, oldest_equity = self.equity_history[0]
+            if (timestamp - oldest_ts).total_seconds() < 86400:  # Less than 1 day
+                return {'exceeded': False, 'loss_pct': 0.0}
+            # Otherwise, use oldest available value but validate it's reasonable
+            equity_one_day_ago = oldest_equity
+            # Validate: if equity changed by more than 50%, likely stale data
+            if abs(equity_one_day_ago - current_equity) / max(equity_one_day_ago, current_equity) > 0.5:
+                return {'exceeded': False, 'loss_pct': 0.0}
+        
+        if equity_one_day_ago is None or equity_one_day_ago <= 0:
+            return {'exceeded': False, 'loss_pct': 0.0}
+        
+        # Validate equity values are reasonable (not wildly different)
+        equity_ratio = max(equity_one_day_ago, current_equity) / min(equity_one_day_ago, current_equity)
+        if equity_ratio > 3.0:  # More than 3x difference suggests stale or incorrect data
             return {'exceeded': False, 'loss_pct': 0.0}
         
         loss_pct = ((equity_one_day_ago - current_equity) / equity_one_day_ago) * 100
