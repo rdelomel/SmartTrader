@@ -793,7 +793,13 @@ class TradingAgent:
         print("STARTUP: Syncing existing positions from brokers...")
         print("="*60)
         try:
+            # Step 1: Sync positions FROM brokers TO database
             self._sync_positions_from_brokers()
+            
+            # Step 2: Clean up phantom trades (trades in database that don't exist in brokers)
+            print("\n[STARTUP] Cleaning up phantom trades (database trades not found in brokers)...")
+            self._cleanup_phantom_trades()
+            
             open_trades = self.storage.get_open_trades() if self.storage else []
             print(f"✅ Startup sync complete: Found {len(open_trades)} open positions in database")
             if open_trades:
@@ -2364,6 +2370,155 @@ class TradingAgent:
                     self.logger.log_error(e, {'broker': broker_name, 'action': 'sync_positions'})
         except Exception as e:
             self.logger.log_error(e, {'action': 'sync_positions_from_brokers'})
+    
+    def _cleanup_phantom_trades(self):
+        """
+        Clean up phantom trades - trades in database that don't exist in brokers.
+        This ensures database and broker APIs are in sync.
+        """
+        try:
+            # Get all open trades from database
+            open_trades = self.storage.get_open_trades()
+            if not open_trades:
+                print("  No open trades in database to check")
+                return
+            
+            # Get all open positions from all brokers
+            broker_positions_by_symbol = {}  # {symbol: [positions]}
+            for broker_name, broker in self.brokers.items():
+                try:
+                    if hasattr(broker, 'get_open_positions'):
+                        broker_positions = broker.get_open_positions()
+                        for pos in broker_positions:
+                            raw_symbol = pos.get('symbol', '')
+                            symbol = raw_symbol.replace('_', '/')
+                            
+                            # Handle Alpaca crypto format: ETHUSD -> ETH/USD
+                            if '/' not in symbol and len(symbol) >= 6:
+                                for base_len in [3, 4]:
+                                    if len(symbol) > base_len:
+                                        base = symbol[:base_len]
+                                        quote = symbol[base_len:]
+                                        if quote in ['USD', 'EUR', 'GBP', 'JPY']:
+                                            symbol = f"{base}/{quote}"
+                                            break
+                            
+                            if symbol not in broker_positions_by_symbol:
+                                broker_positions_by_symbol[symbol] = []
+                            broker_positions_by_symbol[symbol].append({
+                                'broker': broker_name,
+                                'side': pos.get('side', 'buy'),
+                                'quantity': pos.get('quantity', 0),
+                                'entry_price': pos.get('entry_price', 0),
+                                'position': pos
+                            })
+                except Exception as e:
+                    print(f"  ⚠️  Error getting positions from {broker_name}: {e}")
+                    continue
+            
+            # Check each database trade against broker positions
+            phantom_trades = []
+            for trade in open_trades:
+                trade_id = trade.get('trade_id')
+                symbol = trade.get('symbol', '').replace('_', '/')
+                side = trade.get('side', 'buy').lower()
+                entry_price = trade.get('entry_price', 0)
+                quantity = trade.get('quantity', 0)
+                
+                # Normalize symbol for comparison
+                if '/' not in symbol and len(symbol) >= 6:
+                    for base_len in [3, 4]:
+                        if len(symbol) > base_len:
+                            base = symbol[:base_len]
+                            quote = symbol[base_len:]
+                            if quote in ['USD', 'EUR', 'GBP', 'JPY']:
+                                symbol = f"{base}/{quote}"
+                                break
+                
+                # Check if this trade exists in any broker
+                found_in_broker = False
+                matching_broker = None
+                
+                # Check all broker positions for this symbol
+                for check_symbol, broker_positions in broker_positions_by_symbol.items():
+                    # Normalize check_symbol
+                    check_symbol_normalized = check_symbol.replace('_', '/')
+                    if '/' not in check_symbol_normalized and len(check_symbol_normalized) >= 6:
+                        for base_len in [3, 4]:
+                            if len(check_symbol_normalized) > base_len:
+                                base = check_symbol_normalized[:base_len]
+                                quote = check_symbol_normalized[base_len:]
+                                if quote in ['USD', 'EUR', 'GBP', 'JPY']:
+                                    check_symbol_normalized = f"{base}/{quote}"
+                                    break
+                    
+                    # Check if symbols match
+                    if check_symbol_normalized == symbol or check_symbol == symbol:
+                        for broker_pos in broker_positions:
+                            broker_side = broker_pos['side'].lower() if isinstance(broker_pos['side'], str) else str(broker_pos['side']).lower()
+                            broker_price = broker_pos['entry_price']
+                            broker_qty = broker_pos['quantity']
+                            
+                            # Match by side and similar price (within 2% tolerance)
+                            side_match = broker_side == side
+                            price_match = abs(broker_price - entry_price) / max(entry_price, 0.01) < 0.02 if entry_price > 0 else False
+                            
+                            if side_match and price_match:
+                                found_in_broker = True
+                                matching_broker = broker_pos['broker']
+                                break
+                        
+                        if found_in_broker:
+                            break
+                
+                if not found_in_broker:
+                    phantom_trades.append(trade)
+            
+            # Handle phantom trades
+            if phantom_trades:
+                print(f"  ⚠️  Found {len(phantom_trades)} phantom trade(s) (not found in any broker):")
+                for trade in phantom_trades:
+                    symbol = trade.get('symbol')
+                    side = trade.get('side')
+                    trade_id = trade.get('trade_id')
+                    entry_time = trade.get('entry_time')
+                    
+                    # Check how old the trade is
+                    age_days = 0
+                    if entry_time:
+                        if isinstance(entry_time, str):
+                            try:
+                                from dateutil import parser
+                                entry_time = parser.parse(entry_time)
+                            except:
+                                pass
+                        if isinstance(entry_time, datetime):
+                            age_days = (datetime.now() - entry_time).total_seconds() / 86400
+                    
+                    print(f"    - {symbol} {side} (ID: {trade_id}, Age: {age_days:.1f} days)")
+                    
+                    # If trade is more than 1 day old, mark as closed (likely was closed externally)
+                    # If trade is recent (< 1 day), keep it open but log a warning (might be a timing issue)
+                    if age_days > 1:
+                        # Mark as closed - trade was likely closed externally
+                        try:
+                            self.storage.update_trade(trade_id, {
+                                'status': 'closed',
+                                'exit_time': datetime.now(),
+                                'exit_price': trade.get('entry_price', 0),  # Use entry price as exit (no better data)
+                                'pnl': trade.get('pnl', 0)  # Keep existing P&L
+                            })
+                            print(f"      ✅ Marked as closed (age: {age_days:.1f} days)")
+                        except Exception as e:
+                            print(f"      ❌ Error marking trade as closed: {e}")
+                    else:
+                        print(f"      ⚠️  Keeping open (recent trade, might be timing issue)")
+            else:
+                print("  ✅ All database trades verified in brokers - no phantom trades found")
+                
+        except Exception as e:
+            print(f"  ❌ Error during phantom trade cleanup: {e}")
+            self.logger.log_error(e, {'component': 'phantom_trade_cleanup'})
     
     def _update_dashboard(self):
         """Update dashboard data"""
