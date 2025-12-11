@@ -320,7 +320,8 @@ class TradingAgent:
                 regime_agent=self.regime_agent,
                 risk_agent=self.risk_agent,
                 drl_agent=self.drl_agent,
-                performance_tracker=self.performance_tracker
+                performance_tracker=self.performance_tracker,
+                sentiment_analyzer=self.sentiment_analyzer  # For LLM conflict resolution
             )
             
             # Keep DecisionEngine for backward compatibility (wrapper)

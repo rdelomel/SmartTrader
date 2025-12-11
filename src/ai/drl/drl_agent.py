@@ -194,6 +194,37 @@ class DRLAgent:
         state_features.append(fund_signal.get('score', 0.0))
         state_features.append(fund_signal.get('confidence', 0.0))
         
+        # Signal conflict information (NEW)
+        # Count BUY vs SELL signals
+        from ..strategies.base_strategy import Signal
+        buy_count = sum(1 for sig in agent_signals.values() 
+                       if sig.get('signal') == Signal.BUY)
+        sell_count = sum(1 for sig in agent_signals.values() 
+                        if sig.get('signal') == Signal.SELL)
+        total_signals = len([s for s in agent_signals.values() if s.get('confidence', 0) > 0.05])
+        conflict_ratio = abs(buy_count - sell_count) / max(total_signals, 1.0)  # 0 = high conflict, 1 = no conflict
+        state_features.append(conflict_ratio)
+        
+        # Signal strength distribution (NEW)
+        confidences = [sig.get('confidence', 0.0) for sig in agent_signals.values() if sig.get('confidence', 0) > 0.05]
+        if confidences:
+            max_confidence = max(confidences)
+            avg_confidence = sum(confidences) / len(confidences)
+            min_confidence = min(confidences)
+            state_features.append(max_confidence)
+            state_features.append(avg_confidence)
+            state_features.append(min_confidence)
+        else:
+            state_features.extend([0.0, 0.0, 0.0])
+        
+        # Consensus metrics (NEW)
+        # Calculate consensus strength (simplified)
+        if total_signals > 0:
+            consensus_strength = max(buy_count, sell_count) / total_signals
+        else:
+            consensus_strength = 0.0
+        state_features.append(consensus_strength)
+        
         # Regime information
         state_features.append(1.0 if regime_info.get('regime') == 'Bullish Trend' else 0.0)
         state_features.append(1.0 if regime_info.get('regime') == 'Bearish Trend' else 0.0)

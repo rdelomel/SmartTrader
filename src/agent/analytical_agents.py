@@ -133,29 +133,60 @@ class TechnicalAnalystAgent(BaseAgent):
             else:
                 print(f"  Strategy {strategy.name}: DISABLED")
         
-        # Get ML model signal
+        # Get ML model signal with dynamic weighting
         if self.ml_model and self.ml_model.is_trained:
             try:
                 ml_signal = self._get_ml_signal(data, symbol)
                 if ml_signal:
+                    base_weight = self.config.get('ml_weight', 0.3)
+                    
+                    # Dynamic weighting based on recent performance (if available)
+                    # TODO: Implement model performance tracking
+                    # For now, use base weight
+                    performance_bonus = 0.0  # Will be implemented with performance tracker
+                    effective_weight = base_weight * (1.0 + performance_bonus)
+                    
+                    # Cap confidence to prevent dominance (already done in aggregation, but log it)
+                    original_confidence = ml_signal.get('confidence', 0.0)
+                    if original_confidence > 0.85:
+                        print(f"  ⚠️  ML Model high confidence: {original_confidence:.3f} (will be capped at 0.85 in aggregation)")
+                    
                     signals.append(ml_signal)
-                    weight = self.config.get('ml_weight', 0.3)
-                    weights.append(weight)
-                    print(f"  ML Model: {ml_signal['signal'].name}, confidence={ml_signal.get('confidence', 0):.3f}, weight={weight:.2f}")
+                    weights.append(effective_weight)
+                    print(f"  ML Model: {ml_signal['signal'].name}, confidence={original_confidence:.3f}, base_weight={base_weight:.2f}, effective_weight={effective_weight:.3f}")
             except Exception as e:
                 print(f"  Error getting ML signal: {e}")
         else:
             print(f"  ML Model: {'NOT TRAINED' if self.ml_model else 'NOT ENABLED'}")
         
-        # Get LSTM signal
+        # Get LSTM signal with dynamic weighting
         if self.lstm_model and self.lstm_model.is_trained:
             try:
                 lstm_signal = self._get_lstm_signal(data, symbol)
                 if lstm_signal:
+                    base_weight = self.config.get('lstm_weight', 0.15)
+                    
+                    # Dynamic weighting based on recent performance (if available)
+                    performance_bonus = 0.0  # Will be implemented with performance tracker
+                    effective_weight = base_weight * (1.0 + performance_bonus)
+                    
                     signals.append(lstm_signal)
-                    weight = self.config.get('lstm_weight', 0.15)
-                    weights.append(weight)
-                    print(f"  LSTM Model: {lstm_signal['signal'].name}, confidence={lstm_signal.get('confidence', 0):.3f}, weight={weight:.2f}")
+                    weights.append(effective_weight)
+                    print(f"  LSTM Model: {lstm_signal['signal'].name}, confidence={lstm_signal.get('confidence', 0):.3f}, base_weight={base_weight:.2f}, effective_weight={effective_weight:.3f}")
+                    
+                    # Ensemble check: If ML and LSTM agree, boost confidence
+                    if self.ml_model and self.ml_model.is_trained:
+                        ml_signal_obj = next((s for s in signals if s.get('source') == 'ML_Model'), None)
+                        if ml_signal_obj and ml_signal_obj.get('signal') == lstm_signal.get('signal'):
+                            # Both models agree - boost confidence slightly
+                            agreement_boost = 0.05
+                            lstm_signal['confidence'] = min(lstm_signal.get('confidence', 0.0) + agreement_boost, 1.0)
+                            print(f"    ✅ ML and LSTM agree on {lstm_signal['signal'].name} - confidence boosted by {agreement_boost:.2f}")
+                        elif ml_signal_obj and ml_signal_obj.get('signal') != lstm_signal.get('signal'):
+                            # Models disagree - reduce confidence slightly
+                            disagreement_penalty = 0.05
+                            lstm_signal['confidence'] = max(lstm_signal.get('confidence', 0.0) - disagreement_penalty, 0.0)
+                            print(f"    ⚠️  ML and LSTM disagree - confidence reduced by {disagreement_penalty:.2f}")
             except Exception as e:
                 print(f"  Error getting LSTM signal: {e}")
         else:
@@ -182,6 +213,15 @@ class TechnicalAnalystAgent(BaseAgent):
         for signal, weight in zip(signals, weights):
             signal_val = 1 if signal['signal'] == Signal.BUY else (-1 if signal['signal'] == Signal.SELL else 0)
             confidence = signal.get('confidence', 0.5)
+            
+            # Cap ML model confidence at reasonable maximum (0.85) to prevent single model from dominating
+            # This prevents overconfident ML models from overwhelming other signals
+            source = signal.get('source', '')
+            if 'ML Model' in source or 'ml_model' in source.lower():
+                original_confidence = confidence
+                confidence = min(confidence, 0.85)
+                if original_confidence > 0.85:
+                    print(f"    ⚠️  ML Model confidence capped: {original_confidence:.3f} -> {confidence:.3f} (preventing dominance)")
             
             weighted_score += signal_val * confidence * weight
             weighted_confidence += confidence * weight

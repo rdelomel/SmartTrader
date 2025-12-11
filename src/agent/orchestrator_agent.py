@@ -12,7 +12,7 @@ from .regime_switching_agent import RegimeSwitchingAgent
 from .risk_manager_agent import RiskManagerAgent
 from ..strategies.base_strategy import Signal
 from ..ai.drl.drl_agent import DRLAgent
-from ..ai.drl.drl_agent import DRLAgent
+from ..ai.models.sentiment_analyzer import SentimentAnalyzer
 
 
 class OrchestratorAgent(BaseAgent):
@@ -27,7 +27,8 @@ class OrchestratorAgent(BaseAgent):
                  regime_agent: Optional[RegimeSwitchingAgent] = None,
                  risk_agent: Optional[RiskManagerAgent] = None,
                  drl_agent: Optional[DRLAgent] = None,
-                 performance_tracker: Optional[object] = None):
+                 performance_tracker: Optional[object] = None,
+                 sentiment_analyzer: Optional[SentimentAnalyzer] = None):
         """
         Initialize orchestrator agent
         
@@ -42,6 +43,7 @@ class OrchestratorAgent(BaseAgent):
             risk_agent: Risk manager agent
             drl_agent: DRL agent for decision making (optional, falls back to weighted voting)
             performance_tracker: Performance tracker for dynamic position sizing (optional)
+            sentiment_analyzer: SentimentAnalyzer instance for LLM-based conflict resolution (optional)
         """
         super().__init__("OrchestratorAgent", config)
         self.technical_agent = technical_agent
@@ -53,6 +55,7 @@ class OrchestratorAgent(BaseAgent):
         self.risk_agent = risk_agent
         self.drl_agent = drl_agent
         self.performance_tracker = performance_tracker
+        self.sentiment_analyzer = sentiment_analyzer  # For LLM conflict resolution
         
         # Decision tree thresholds (used as fallback)
         self.min_confidence = self.config.get('min_confidence', 0.5)
@@ -61,6 +64,9 @@ class OrchestratorAgent(BaseAgent):
         
         # DRL mode
         self.use_drl = self.config.get('use_drl', True) and drl_agent is not None and drl_agent.is_trained
+        
+        # LLM conflict resolution
+        self.use_llm_conflict_resolution = self.config.get('use_llm_conflict_resolution', True) and sentiment_analyzer is not None
     
     def analyze(self, data, symbol: str, asset_class: str,
                 news_items: Optional[List[Dict]] = None,
@@ -394,7 +400,9 @@ class OrchestratorAgent(BaseAgent):
         """
         if not self.drl_agent or not self.drl_agent.is_trained:
             # Fallback to weighted voting
-            return self._weighted_voting(agent_signals, regime_result.get('agent_weights', {}) if regime_result else {})
+            market_data = self._extract_market_features(data)
+            return self._weighted_voting(agent_signals, regime_result.get('agent_weights', {}) if regime_result else {}, 
+                                        regime_result, market_data)
         
         # Extract market data features
         market_data = self._extract_market_features(data)
@@ -486,13 +494,27 @@ class OrchestratorAgent(BaseAgent):
         else:
             signal = Signal.HOLD
         
+        # Hybrid confidence: Combine DRL confidence with weighted voting confidence
+        # Get weighted voting result for comparison
+        market_data_for_voting = self._extract_market_features(data)
+        weighted_result = self._weighted_voting(agent_signals, 
+                                                regime_result.get('agent_weights', {}) if regime_result else {},
+                                                regime_result, market_data_for_voting)
+        weighted_confidence = weighted_result.get('confidence', 0.5)
+        
+        # Hybrid confidence: 60% DRL, 40% weighted voting
+        hybrid_confidence = 0.6 * confidence + 0.4 * weighted_confidence
+        
+        print(f"  DRL Decision: {signal.name}, DRL confidence={confidence:.3f}, Weighted confidence={weighted_confidence:.3f}, Hybrid={hybrid_confidence:.3f}")
+        
         return {
             'signal': signal,
-            'confidence': confidence,
+            'confidence': hybrid_confidence,  # Use hybrid confidence
             'weighted_score': action,
-            'reason': f'DRL decision: action={action:.3f}, confidence={confidence:.3f}',
+            'reason': f'DRL decision: action={action:.3f}, confidence={hybrid_confidence:.3f} (hybrid: 60% DRL + 40% weighted)',
             'drl_action': action,
-            'drl_confidence': confidence
+            'drl_confidence': confidence,
+            'weighted_confidence': weighted_confidence
         }
     
     def _extract_market_features(self, data: pd.DataFrame) -> Dict:
@@ -530,7 +552,8 @@ class OrchestratorAgent(BaseAgent):
             'adx': float(latest.get('adx', 0.0)) if 'adx' in latest else 0.0
         }
     
-    def _weighted_voting(self, agent_signals: Dict, agent_weights: Dict) -> Dict:
+    def _weighted_voting(self, agent_signals: Dict, agent_weights: Dict, 
+                        regime_result: Optional[Dict] = None, market_data: Optional[Dict] = None) -> Dict:
         """
         Perform weighted voting on agent signals
         
@@ -561,11 +584,15 @@ class OrchestratorAgent(BaseAgent):
         filtered_signals = {}
         for agent_name, signal in agent_signals.items():
             confidence = signal.get('confidence', 0.0)
-            # Only include if confidence > 0.05 (5% minimum)
-            if confidence > 0.05 or signal['signal'] != Signal.HOLD:
+            # Only include if confidence > 0.05 (5% minimum) AND signal is not HOLD
+            # This ensures only agents with meaningful confidence AND non-HOLD signals are included
+            if confidence > 0.05 and signal['signal'] != Signal.HOLD:
                 filtered_signals[agent_name] = signal
             else:
-                print(f"    {agent_name}: EXCLUDED (confidence={confidence:.3f} too low)")
+                if confidence <= 0.05:
+                    print(f"    {agent_name}: EXCLUDED (confidence={confidence:.3f} too low)")
+                elif signal['signal'] == Signal.HOLD:
+                    print(f"    {agent_name}: EXCLUDED (signal is HOLD with confidence={confidence:.3f})")
         
         if not filtered_signals:
             return {
@@ -650,7 +677,64 @@ class OrchestratorAgent(BaseAgent):
         elif normalized_score < -threshold:
             final_signal = Signal.SELL
         else:
+            # Normalized score is below threshold - check for tie-breaking scenarios
             final_signal = Signal.HOLD
+            
+            # Tie-breaking logic: If there's a strong signal (confidence > 0.7) and opposing signals are weaker
+            # Find strongest signal and its confidence
+            max_confidence = 0.0
+            max_confidence_signal = None
+            max_confidence_agent = None
+            
+            opposing_confidences = []
+            for agent_name, signal in filtered_signals.items():
+                agent_confidence = signal.get('confidence', 0.0)
+                agent_signal = signal['signal']
+                
+                if agent_confidence > max_confidence:
+                    max_confidence = agent_confidence
+                    max_confidence_signal = agent_signal
+                    max_confidence_agent = agent_name
+                
+                # Collect opposing signal confidences
+                if agent_signal != max_confidence_signal and agent_signal != Signal.HOLD:
+                    opposing_confidences.append(agent_confidence)
+            
+            # Strong signal override: If strongest signal has confidence > 0.7 and opposing signals are weaker
+            if max_confidence > 0.7 and max_confidence_signal != Signal.HOLD:
+                avg_opposing_confidence = sum(opposing_confidences) / len(opposing_confidences) if opposing_confidences else 0.0
+                
+                # If strongest signal is significantly stronger than opposing signals
+                if max_confidence > 1.5 * avg_opposing_confidence or (max_confidence > 0.8 and avg_opposing_confidence < 0.5):
+                    final_signal = max_confidence_signal
+                    print(f"  🔀 Tie-breaking: Strong signal from {max_confidence_agent} ({max_confidence_signal.name}, confidence={max_confidence:.3f}) overrides weaker opposing signals (avg={avg_opposing_confidence:.3f})")
+            
+            # Very strong signal override: If a single agent has confidence > 0.8 and others are < 0.5
+            if max_confidence > 0.8 and max_confidence_signal != Signal.HOLD:
+                weak_opposing = all(c < 0.5 for c in opposing_confidences)
+                if weak_opposing:
+                    final_signal = max_confidence_signal
+                    print(f"  ⚡ Strong signal override: {max_confidence_agent} ({max_confidence_signal.name}, confidence={max_confidence:.3f}) overrides weak opposing signals")
+            
+            # LLM conflict resolution: Use LLM to reason about conflicts when tie-breaking didn't resolve
+            if final_signal == Signal.HOLD and abs(normalized_score) < threshold * 1.2:
+                llm_result = self._llm_resolve_conflicts(
+                    filtered_signals, normalized_score, threshold, 
+                    regime_result=regime_result, market_data=market_data
+                )
+                
+                if llm_result:
+                    llm_signal = llm_result.get('signal')
+                    llm_confidence = llm_result.get('confidence', 0.5)
+                    llm_reasoning = llm_result.get('reasoning', '')
+                    
+                    # Use LLM recommendation if confidence is reasonable
+                    if llm_confidence > 0.4:
+                        final_signal = llm_signal
+                        print(f"  ✅ LLM recommendation accepted: {llm_signal.name} (confidence: {llm_confidence:.3f})")
+                        print(f"     Reasoning: {llm_reasoning[:150]}...")
+                    else:
+                        print(f"  ⚠️  LLM recommendation rejected (low confidence: {llm_confidence:.3f}), keeping HOLD")
         
         # Calculate confidence based on agreeing agents' confidences
         # For BUY/SELL: use weighted average of agreeing agents' confidences
@@ -661,10 +745,11 @@ class OrchestratorAgent(BaseAgent):
                               if s['signal'] == Signal.BUY]
             if agreeing_agents:
                 # Weighted average confidence of agreeing agents
-                agreeing_weight = sum(agent_weights.get(name, base_weights.get(name, 0.33))
+                # Use final weights (base × multiplier), not just multipliers
+                agreeing_weight = sum(base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                     for name, s in agent_signals.items() 
                                     if s['signal'] == Signal.BUY)
-                agreeing_confidence = sum(s['confidence'] * agent_weights.get(name, base_weights.get(name, 0.33))
+                agreeing_confidence = sum(s['confidence'] * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                          for name, s in agent_signals.items() 
                                          if s['signal'] == Signal.BUY) / agreeing_weight if agreeing_weight > 0 else 0.0
                 # Boost confidence if multiple agents agree
@@ -678,10 +763,11 @@ class OrchestratorAgent(BaseAgent):
                               if s['signal'] == Signal.SELL]
             if agreeing_agents:
                 # Weighted average confidence of agreeing agents
-                agreeing_weight = sum(agent_weights.get(name, base_weights.get(name, 0.33))
+                # Use final weights (base × multiplier), not just multipliers
+                agreeing_weight = sum(base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                     for name, s in agent_signals.items() 
                                     if s['signal'] == Signal.SELL)
-                agreeing_confidence = sum(s['confidence'] * agent_weights.get(name, base_weights.get(name, 0.33))
+                agreeing_confidence = sum(s['confidence'] * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                          for name, s in agent_signals.items() 
                                          if s['signal'] == Signal.SELL) / agreeing_weight if agreeing_weight > 0 else 0.0
                 # Boost confidence if multiple agents agree
@@ -691,9 +777,14 @@ class OrchestratorAgent(BaseAgent):
                 confidence = 0.3  # Low confidence if no agents agree
         else:
             # HOLD signal - use lower confidence
-            avg_confidence = sum(s.get('confidence', 0) * agent_weights.get(name, base_weights.get(name, 0.33))
+            # Use final weights (base × multiplier), not just multipliers
+            avg_confidence = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                 for name, s in agent_signals.items()) / total_weight if total_weight > 0 else 0.0
             confidence = min(avg_confidence, 0.5)  # Cap HOLD confidence at 0.5
+        
+        # Calculate average confidence for safety checks (used if needed)
+        avg_confidence_all = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
+                                for name, s in agent_signals.items()) / total_weight if total_weight > 0 else 0.0
         
         # Safety check: If all agents agree on SELL but we got BUY, something is wrong
         # (buy_count, sell_count, hold_count already calculated above)
@@ -702,14 +793,14 @@ class OrchestratorAgent(BaseAgent):
             print(f"  ⚠️  WARNING: All agents say SELL/HOLD but final signal is BUY! Overriding to SELL.")
             print(f"     Agent signals: BUY={buy_count}, SELL={sell_count}, HOLD={hold_count}")
             final_signal = Signal.SELL
-            confidence = min(avg_confidence, 0.5)  # Moderate confidence due to conflict
-            weighted_score = -abs(weighted_score)  # Force negative
+            confidence = min(avg_confidence_all, 0.5)  # Moderate confidence due to conflict
+            normalized_score = -abs(normalized_score)  # Force negative
         elif buy_count >= 2 and sell_count == 0 and final_signal == Signal.SELL:
             print(f"  ⚠️  WARNING: All agents say BUY/HOLD but final signal is SELL! Overriding to BUY.")
             print(f"     Agent signals: BUY={buy_count}, SELL={sell_count}, HOLD={hold_count}")
             final_signal = Signal.BUY
-            confidence = min(avg_confidence, 0.5)
-            weighted_score = abs(weighted_score)  # Force positive
+            confidence = min(avg_confidence_all, 0.5)
+            normalized_score = abs(normalized_score)  # Force positive
         
         return {
             'signal': final_signal,
@@ -771,4 +862,166 @@ class OrchestratorAgent(BaseAgent):
             'total_agents': len(agent_signals),
             'voting_agents': total_voting
         }
+    
+    def _llm_resolve_conflicts(self, agent_signals: Dict, normalized_score: float, 
+                               threshold: float, regime_result: Optional[Dict],
+                               market_data: Optional[Dict] = None) -> Optional[Dict]:
+        """
+        Use LLM to intelligently reason about conflicting signals when simple tie-breaking isn't sufficient.
+        
+        Args:
+            agent_signals: Dictionary of agent signals
+            normalized_score: Current normalized weighted score
+            threshold: Confidence threshold
+            regime_result: Regime switching result
+            market_data: Optional market data features
+        
+        Returns:
+            Dictionary with LLM recommendation (signal, confidence, reasoning) or None if not used
+        """
+        if not self.use_llm_conflict_resolution or not self.sentiment_analyzer:
+            return None
+        
+        # Only use LLM when:
+        # 1. Signals are strongly conflicting (BUY vs SELL with similar strength)
+        # 2. Normalized score is near threshold (ambiguous)
+        # 3. Multiple agents disagree significantly
+        
+        buy_signals = [(name, sig) for name, sig in agent_signals.items() 
+                      if sig.get('signal') == Signal.BUY and sig.get('confidence', 0) > 0.05]
+        sell_signals = [(name, sig) for name, sig in agent_signals.items() 
+                       if sig.get('signal') == Signal.SELL and sig.get('confidence', 0) > 0.05]
+        
+        # Check if we have strong conflicts
+        has_strong_conflict = (len(buy_signals) > 0 and len(sell_signals) > 0 and 
+                              abs(normalized_score) < threshold * 1.2)  # Near threshold
+        
+        if not has_strong_conflict:
+            return None
+        
+        try:
+            # Build prompt with all agent signals and context
+            signal_summary = []
+            for name, sig in agent_signals.items():
+                signal_type = sig.get('signal', Signal.HOLD)
+                confidence = sig.get('confidence', 0.0)
+                reason = sig.get('reason', 'N/A')
+                signal_summary.append(f"- {name}: {signal_type.name} (confidence {confidence:.2f}) - {reason}")
+            
+            regime = regime_result.get('regime', 'Neutral') if regime_result else 'Neutral'
+            regime_conf = regime_result.get('confidence', 0.0) if regime_result else 0.0
+            
+            market_context = ""
+            if market_data:
+                volatility = market_data.get('volatility', 0.0)
+                volume_ratio = market_data.get('volume_ratio', 1.0)
+                market_context = f"\nMarket Context:\n- Volatility: {volatility:.4f}\n- Volume Ratio: {volume_ratio:.2f}"
+            
+            # Get performance metrics if available
+            perf_context = ""
+            if self.performance_tracker:
+                try:
+                    metrics = self.performance_tracker.calculate_metrics()
+                    sharpe = metrics.get('sharpe_ratio', 0.0)
+                    win_rate = metrics.get('win_rate', 0.0)
+                    perf_context = f"\nRecent Performance:\n- Sharpe Ratio: {sharpe:.2f}\n- Win Rate: {win_rate:.1f}%"
+                except:
+                    pass
+            
+            prompt = f"""You are a trading signal aggregation expert. Analyze these conflicting signals and recommend which should dominate:
+
+Agent Signals:
+{chr(10).join(signal_summary)}
+
+Market Regime: {regime} (confidence: {regime_conf:.2f}){market_context}{perf_context}
+
+Current Analysis:
+- Normalized Score: {normalized_score:.3f} (threshold: {threshold:.3f})
+- BUY signals: {len(buy_signals)}
+- SELL signals: {len(sell_signals)}
+
+Which signal should dominate? Provide:
+1. Recommended signal (BUY, SELL, or HOLD)
+2. Confidence level (0.0 to 1.0)
+3. Brief reasoning (2-3 sentences)
+
+Respond in JSON format:
+{{
+  "signal": "BUY|SELL|HOLD",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation"
+}}"""
+            
+            # Use sentiment analyzer's LLM (it has the infrastructure)
+            result = self.sentiment_analyzer.analyze_text(prompt)
+            
+            # Parse LLM response - try to extract structured response
+            reasoning_text = result.get('reasoning', '')
+            llm_signal = None
+            llm_confidence = None
+            llm_reasoning = reasoning_text
+            
+            # Try to extract JSON from reasoning
+            import json
+            import re
+            # Look for JSON object in reasoning
+            json_match = re.search(r'\{[^{}]*"signal"[^{}]*\}', reasoning_text, re.IGNORECASE)
+            if not json_match:
+                # Try broader match
+                json_match = re.search(r'\{.*?"signal".*?\}', reasoning_text, re.IGNORECASE | re.DOTALL)
+            
+            if json_match:
+                try:
+                    llm_result = json.loads(json_match.group())
+                    signal_str = str(llm_result.get('signal', 'HOLD')).upper()
+                    llm_confidence = float(llm_result.get('confidence', 0.5))
+                    llm_reasoning = llm_result.get('reasoning', reasoning_text)
+                    
+                    # Convert signal string to Signal enum
+                    if 'BUY' in signal_str:
+                        llm_signal = Signal.BUY
+                    elif 'SELL' in signal_str:
+                        llm_signal = Signal.SELL
+                    else:
+                        llm_signal = Signal.HOLD
+                except Exception as e:
+                    print(f"  ⚠️  LLM JSON parsing error: {e}")
+            
+            # If JSON parsing failed, try to infer from reasoning text
+            if llm_signal is None:
+                reasoning_lower = reasoning_text.lower()
+                if 'buy' in reasoning_lower and 'sell' not in reasoning_lower:
+                    llm_signal = Signal.BUY
+                elif 'sell' in reasoning_lower and 'buy' not in reasoning_lower:
+                    llm_signal = Signal.SELL
+                else:
+                    # Use sentiment score as fallback
+                    sentiment_score = result.get('sentiment', 0.0)
+                    if abs(sentiment_score) > 0.3:
+                        llm_signal = Signal.BUY if sentiment_score > 0 else Signal.SELL
+                    else:
+                        llm_signal = Signal.HOLD
+                
+                if llm_confidence is None:
+                    llm_confidence = result.get('confidence', 0.5)
+                    # Adjust confidence based on sentiment strength
+                    if abs(sentiment_score) > 0.5:
+                        llm_confidence = min(llm_confidence + 0.1, 1.0)
+            
+            if llm_signal and llm_signal != Signal.HOLD:
+                print(f"  🤖 LLM Conflict Resolution:")
+                print(f"     Recommended: {llm_signal.name} (confidence: {llm_confidence:.3f})")
+                print(f"     Reasoning: {llm_reasoning[:200]}...")  # Truncate long reasoning
+                
+                return {
+                    'signal': llm_signal,
+                    'confidence': llm_confidence,
+                    'reasoning': llm_reasoning,
+                    'source': 'LLM'
+                }
+            
+        except Exception as e:
+            print(f"  ⚠️  LLM conflict resolution error: {e}")
+        
+        return None
 
