@@ -49,6 +49,21 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     @app.get("/")
     async def get_dashboard():
         """Serve unified dashboard HTML with tabs"""
+        # Try to load initial data from database if dashboard is empty
+        if (dashboard_data.get('equity', 0) == 10000.0 and 
+            dashboard_data.get('balance', 0) == 10000.0 and 
+            len(dashboard_data.get('positions', [])) == 0 and
+            storage):
+            try:
+                # Load initial data from database
+                open_trades = storage.get_open_trades()
+                if open_trades or (hasattr(storage, 'get_all_trades') and storage.get_all_trades(limit=1)):
+                    # We have data, trigger a load
+                    # This will be handled by the /api/dashboard endpoint when called
+                    pass
+            except:
+                pass
+        
         # Get report data if available
         report_data = None
         if reporter:
@@ -300,6 +315,92 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     async def get_status():
         """Get current status"""
         return dashboard_data
+    
+    @app.get("/api/dashboard")
+    async def get_dashboard_api():
+        """Get dashboard data as JSON - with fallback to load from database if empty"""
+        # If dashboard data is still default/empty, try to load from database
+        if (dashboard_data.get('equity', 0) == 10000.0 and 
+            dashboard_data.get('balance', 0) == 10000.0 and 
+            len(dashboard_data.get('positions', [])) == 0 and
+            len(dashboard_data.get('trades', [])) == 0 and
+            app.storage):
+            # Try to load data from database
+            try:
+                # Get open trades
+                open_trades = app.storage.get_open_trades()
+                positions = []
+                for trade in open_trades:
+                    positions.append({
+                        'symbol': trade.get('symbol'),
+                        'side': trade.get('side', 'buy'),
+                        'quantity': trade.get('quantity', 0),
+                        'entry_price': trade.get('entry_price', 0),
+                        'current_price': trade.get('entry_price', 0),  # Fallback
+                        'pnl': trade.get('pnl', 0),
+                        'trade_id': trade.get('trade_id')
+                    })
+                
+                # Get recent closed trades
+                all_trades = app.storage.get_all_trades(limit=50) if hasattr(app.storage, 'get_all_trades') else []
+                closed_trades = [t for t in all_trades if t.get('status') == 'closed']
+                
+                # Calculate totals
+                total_balance = 0.0
+                if app.brokers:
+                    for broker in app.brokers.values():
+                        try:
+                            balance_info = broker.get_account_balance()
+                            total_balance += balance_info.get('total', 0.0)
+                        except:
+                            pass
+                
+                # Calculate realized P&L from closed trades
+                realized_pnl = sum(t.get('pnl', 0) for t in closed_trades)
+                
+                # Get initial equity (try to get from reporter, or use balance as fallback)
+                initial_equity = 10000.0  # Default
+                if reporter and hasattr(reporter, 'initial_equity'):
+                    initial_equity = reporter.initial_equity
+                if not initial_equity or initial_equity == 0:
+                    initial_equity = total_balance if total_balance > 0 else 10000.0
+                
+                # Calculate equity (balance + unrealized P&L)
+                unrealized_pnl = sum(p.get('pnl', 0) for p in positions)
+                equity = total_balance + unrealized_pnl
+                
+                # Calculate total return
+                total_return = ((equity - initial_equity) / initial_equity * 100) if initial_equity > 0 else 0.0
+                
+                # Calculate win/loss rates
+                winning_trades = [t for t in closed_trades if t.get('pnl', 0) > 0]
+                losing_trades = [t for t in closed_trades if t.get('pnl', 0) < 0]
+                win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0.0
+                loss_rate = (len(losing_trades) / len(closed_trades) * 100) if closed_trades else 0.0
+                
+                # Update dashboard data with loaded information
+                dashboard_data.update({
+                    'equity': equity,
+                    'balance': total_balance,
+                    'positions': positions,
+                    'trades': closed_trades[-10:],  # Last 10 closed trades
+                    'performance': {
+                        'total_return': total_return,
+                        'realized_pnl': realized_pnl,
+                        'unrealized_pnl': unrealized_pnl,
+                        'total_trades': len(closed_trades),
+                        'win_rate': win_rate,
+                        'loss_rate': loss_rate,
+                        'sharpe_ratio': 0.0,
+                        'initial_equity': initial_equity
+                    }
+                })
+            except Exception as e:
+                print(f"Error loading dashboard data from database: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        return _serialize_datetime(dashboard_data)
     
     @app.post("/api/close_position/{trade_id}")
     async def close_position(trade_id: str):
@@ -987,13 +1088,52 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                 document.getElementById(tabName + '-chart').classList.add('active');
             }}
             
+            // Load initial dashboard data via API (fallback if WebSocket hasn't connected yet)
+            async function loadInitialData() {{
+                try {{
+                    const response = await fetch('/api/dashboard');
+                    const data = await response.json();
+                    updateDashboard(data);
+                }} catch (error) {{
+                    console.error('Error loading initial dashboard data:', error);
+                    // Try fallback endpoint
+                    try {{
+                        const response = await fetch('/api/status');
+                        const data = await response.json();
+                        updateDashboard(data);
+                    }} catch (e) {{
+                        console.error('Error loading dashboard status:', e);
+                    }}
+                }}
+            }}
+            
+            // Load data immediately on page load
+            loadInitialData();
+            
             // WebSocket for real-time dashboard updates
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsHost = window.location.host;
             const ws = new WebSocket(`${{wsProtocol}}//${{wsHost}}/ws`);
+            
+            ws.onopen = function() {{
+                console.log('WebSocket connected');
+            }};
+            
+            ws.onerror = function(error) {{
+                console.error('WebSocket error:', error);
+                // Fallback to polling if WebSocket fails
+                setInterval(loadInitialData, 5000); // Poll every 5 seconds
+            }};
+            
             ws.onmessage = function(event) {{
                 const data = JSON.parse(event.data);
                 updateDashboard(data);
+            }};
+            
+            ws.onclose = function() {{
+                console.log('WebSocket closed, falling back to polling');
+                // Fallback to polling if WebSocket closes
+                setInterval(loadInitialData, 5000); // Poll every 5 seconds
             }};
             
             function updateDashboard(data) {{
