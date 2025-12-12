@@ -1258,6 +1258,59 @@ class TradingAgent:
             print(f"    Stop Loss: ${stop_loss:.2f}" if stop_loss is not None else "    Stop Loss: None")
             print(f"    Take Profit: ${take_profit:.2f}" if take_profit is not None else "    Take Profit: None")
             
+            # CRITICAL: Check position correlation BEFORE portfolio exposure check
+            # Prevent over-concentration in correlated assets (e.g., multiple crypto or forex pairs)
+            max_correlated_positions = self.config.get('max_correlated_positions', 3)  # Default: 3 for same asset class
+            max_correlated_pairs = self.config.get('max_correlated_pairs', 2)  # Default: 2 for correlated pairs
+            
+            # Define correlated forex pairs
+            correlated_forex_groups = [
+                ['EUR/USD', 'GBP/USD', 'EUR/GBP'],  # EUR/GBP correlated
+                ['USD/JPY', 'EUR/JPY', 'GBP/JPY'],  # JPY pairs correlated
+                ['AUD/USD', 'NZD/USD'],  # Commodity currencies
+            ]
+            
+            # Get current open positions from database
+            open_positions = self.storage.get_open_trades()
+            
+            if open_positions:
+                # Group positions by asset class
+                positions_by_class = {}
+                for pos in open_positions:
+                    pos_symbol = pos.get('symbol', '')
+                    asset_class = 'crypto' if any(c in pos_symbol.upper() for c in ['BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'LINK', 'MATIC', 'AVAX', 'UNI', 'ATOM']) else \
+                                 'forex' if '/' in pos_symbol and any(c in pos_symbol.upper() for c in ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD', 'XAU', 'XAG']) else \
+                                 'stocks'
+                    
+                    if asset_class not in positions_by_class:
+                        positions_by_class[asset_class] = []
+                    positions_by_class[asset_class].append(pos_symbol)
+                
+                # Check asset class correlation (all crypto positions are highly correlated)
+                current_asset_class = 'crypto' if any(c in symbol.upper() for c in ['BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'LINK', 'MATIC', 'AVAX', 'UNI', 'ATOM']) else \
+                                    'forex' if '/' in symbol and any(c in symbol.upper() for c in ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD', 'XAU', 'XAG']) else \
+                                    'stocks'
+                
+                current_class_count = len(positions_by_class.get(current_asset_class, []))
+                if current_class_count >= max_correlated_positions:
+                    print(f"  ❌ REJECTED: Correlation limit exceeded for {current_asset_class}")
+                    print(f"     Current {current_asset_class} positions: {current_class_count}, Limit: {max_correlated_positions}")
+                    print(f"     Existing positions: {', '.join(positions_by_class.get(current_asset_class, []))}")
+                    return
+                
+                # Check forex pair correlation (correlated pairs)
+                if current_asset_class == 'forex':
+                    for group in correlated_forex_groups:
+                        existing_in_group = [p for p in positions_by_class.get('forex', []) if p in group]
+                        if symbol in group and len(existing_in_group) >= max_correlated_pairs:
+                            print(f"  ❌ REJECTED: Correlated forex pair limit exceeded")
+                            print(f"     Symbol {symbol} is correlated with: {', '.join(group)}")
+                            print(f"     Existing correlated positions: {', '.join(existing_in_group)}")
+                            print(f"     Limit: {max_correlated_pairs} correlated pairs")
+                            return
+                
+                print(f"  ✅ Correlation check passed: {current_asset_class} positions: {current_class_count + 1}/{max_correlated_positions}")
+            
             # CRITICAL: Check portfolio-level exposure limits BEFORE placing order
             # This prevents opening positions that exceed total portfolio exposure limits
             if hasattr(self, 'portfolio_risk_manager') and self.portfolio_risk_manager:

@@ -43,8 +43,8 @@ class CircuitBreaker:
         if timestamp is None:
             timestamp = datetime.now()
         
-        # Clean up stale equity history if current equity is very different
-        # This handles cases where account balance changed significantly (new session, deposit, etc.)
+        # CRITICAL: Check for real drawdowns BEFORE clearing history
+        # If equity drops significantly, trigger circuit breaker, don't just clear history
         if self.equity_history:
             # Check recent history entries
             recent_entries = list(self.equity_history)[-10:]  # Last 10 entries
@@ -52,11 +52,43 @@ class CircuitBreaker:
                 recent_equities = [e[1] for e in recent_entries]
                 avg_recent_equity = sum(recent_equities) / len(recent_equities)
                 
-                # If current equity differs by more than 50% from recent average, likely new session
                 if avg_recent_equity > 0:
                     equity_ratio = max(equity, avg_recent_equity) / min(equity, avg_recent_equity)
-                    if equity_ratio > 2.0:  # More than 2x difference
-                        print(f"Circuit Breaker: Detected significant equity change ({equity:.2f} vs recent avg {avg_recent_equity:.2f}). Clearing stale history.")
+                    
+                    # If equity DROPS significantly (>30%), check if it's a real drawdown
+                    if equity < avg_recent_equity * 0.7:  # 30% drop
+                        # Check if this is recent (within last hour) - likely real drawdown
+                        recent_times = [e[0] for e in recent_entries[-5:]]
+                        if recent_times:
+                            time_diff = (timestamp - recent_times[-1]).total_seconds() / 3600
+                            if time_diff < 1.0:  # Within last hour
+                                # Real drawdown - trigger circuit breaker, don't clear history
+                                drop_pct = ((avg_recent_equity - equity) / avg_recent_equity * 100)
+                                print(f"Circuit Breaker: CRITICAL - Equity dropped {drop_pct:.1f}% in {time_diff:.1f} hours")
+                                self.triggered = True
+                                self.triggered_at = timestamp
+                                self.trigger_reason = f"Critical equity drop: {drop_pct:.1f}% in {time_diff:.1f} hours"
+                                # Still add to history for tracking, but don't continue normal processing
+                                self.equity_history.append((timestamp, equity))
+                                return  # Don't continue with normal history update
+                    
+                    # Check for immediate drop >20% in single update (very recent)
+                    if len(recent_entries) >= 2:
+                        last_equity = recent_entries[-1][1]
+                        if equity < last_equity * 0.8:  # 20% drop from last update
+                            time_diff = (timestamp - recent_entries[-1][0]).total_seconds() / 60  # minutes
+                            if time_diff < 60:  # Within last hour
+                                drop_pct = ((last_equity - equity) / last_equity * 100)
+                                print(f"Circuit Breaker: IMMEDIATE TRIGGER - Equity dropped {drop_pct:.1f}% in {time_diff:.1f} minutes")
+                                self.triggered = True
+                                self.triggered_at = timestamp
+                                self.trigger_reason = f"Immediate equity drop: {drop_pct:.1f}% in {time_diff:.1f} minutes"
+                                self.equity_history.append((timestamp, equity))
+                                return
+                    
+                    # Only clear history if equity INCREASED significantly (likely new session/deposit)
+                    if equity_ratio > 2.0 and equity > avg_recent_equity:
+                        print(f"Circuit Breaker: Detected significant equity increase ({equity:.2f} vs recent avg {avg_recent_equity:.2f}). Clearing stale history.")
                         # Keep only very recent entries (last hour) or clear all if too old
                         cutoff_time = timestamp - timedelta(hours=1)
                         filtered_entries = [(ts, eq) for ts, eq in self.equity_history if ts >= cutoff_time]

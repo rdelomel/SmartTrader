@@ -407,6 +407,39 @@ class OrchestratorAgent(BaseAgent):
         
         will_trade = (final_signal['signal'] != Signal.HOLD and 
                      final_signal['confidence'] > self.min_confidence)
+        
+        # CRITICAL: Check minimum technical confidence if trading primarily on sentiment
+        # Don't trade on sentiment alone when technical is weak
+        if will_trade and final_signal['signal'] != Signal.HOLD:
+            min_technical_confidence = self.config.get('min_technical_confidence_for_sentiment_trade', 0.40)
+            technical_signal = agent_signals.get('technical', {})
+            technical_conf = technical_signal.get('confidence', 0.0)
+            sentiment_signal = agent_signals.get('sentiment', {})
+            sentiment_conf = sentiment_signal.get('confidence', 0.0)
+            
+            # Check if this trade is primarily based on sentiment
+            is_sentiment_driven = (sentiment_conf > technical_conf * 1.5 and sentiment_conf > 0.6)
+            
+            if is_sentiment_driven and technical_conf < min_technical_confidence:
+                # Technical is too weak - check if there's a conflict
+                technical_sig = technical_signal.get('signal', Signal.HOLD)
+                sentiment_sig = sentiment_signal.get('signal', Signal.HOLD)
+                has_conflict = (technical_sig != Signal.HOLD and sentiment_sig != Signal.HOLD and 
+                               technical_sig != sentiment_sig)
+                
+                if has_conflict:
+                    # Conflict exists - LLM should have resolved it, but if not, reject
+                    print(f"  ⚠️  WARNING: Trading on sentiment ({sentiment_conf:.3f}) with weak technical ({technical_conf:.3f}) and conflict")
+                    print(f"     Technical confidence ({technical_conf:.3f}) < minimum ({min_technical_confidence:.3f})")
+                    print(f"     LLM resolution should have been used - rejecting trade for safety")
+                    will_trade = False
+                else:
+                    # No conflict but technical is weak - reject trade (don't trade on sentiment alone)
+                    print(f"  ❌ REJECTED: Trading on sentiment alone not allowed")
+                    print(f"     Sentiment confidence: {sentiment_conf:.3f}, Technical confidence: {technical_conf:.3f}")
+                    print(f"     Technical confidence ({technical_conf:.3f}) < minimum ({min_technical_confidence:.3f})")
+                    will_trade = False
+        
         print(f"  Will Execute Trade: {'YES ✓' if will_trade else 'NO ✗'}")
         
         if not will_trade:
@@ -828,6 +861,7 @@ class OrchestratorAgent(BaseAgent):
         
         # Calculate confidence based on agreeing agents' confidences
         # For BUY/SELL: use weighted average of agreeing agents' confidences
+        # CRITICAL: Apply disagreement penalty if opposing signals exist
         # For HOLD: use lower confidence
         if final_signal == Signal.BUY:
             # Get confidences of agents that agree (BUY) or are neutral (HOLD with low weight)
@@ -845,6 +879,21 @@ class OrchestratorAgent(BaseAgent):
                 # Boost confidence if multiple agents agree
                 consensus_boost = min(1.0, 1.0 + (buy_count - 1) * 0.1)
                 confidence = min(agreeing_confidence * consensus_boost, 1.0)
+                
+                # CRITICAL: Apply disagreement penalty if opposing signals exist
+                if sell_count > 0:
+                    # Calculate average opposing confidence
+                    opposing_weight = sum(base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
+                                         for name, s in agent_signals.items() 
+                                         if s['signal'] == Signal.SELL)
+                    opposing_confidence = sum(s['confidence'] * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
+                                             for name, s in agent_signals.items() 
+                                             if s['signal'] == Signal.SELL) / opposing_weight if opposing_weight > 0 else 0.0
+                    
+                    # Penalty: reduce confidence by 20-30% based on opposing strength
+                    penalty = min(0.3, opposing_confidence * 0.4)  # Up to 30% penalty
+                    confidence = confidence * (1.0 - penalty)
+                    print(f"  ⚠️  Disagreement penalty applied: {penalty*100:.1f}% (opposing confidence: {opposing_confidence:.3f})")
             else:
                 confidence = 0.3  # Low confidence if no agents agree
         elif final_signal == Signal.SELL:
@@ -863,6 +912,21 @@ class OrchestratorAgent(BaseAgent):
                 # Boost confidence if multiple agents agree
                 consensus_boost = min(1.0, 1.0 + (sell_count - 1) * 0.1)
                 confidence = min(agreeing_confidence * consensus_boost, 1.0)
+                
+                # CRITICAL: Apply disagreement penalty if opposing signals exist
+                if buy_count > 0:
+                    # Calculate average opposing confidence
+                    opposing_weight = sum(base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
+                                         for name, s in agent_signals.items() 
+                                         if s['signal'] == Signal.BUY)
+                    opposing_confidence = sum(s['confidence'] * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
+                                             for name, s in agent_signals.items() 
+                                             if s['signal'] == Signal.BUY) / opposing_weight if opposing_weight > 0 else 0.0
+                    
+                    # Penalty: reduce confidence by 20-30% based on opposing strength
+                    penalty = min(0.3, opposing_confidence * 0.4)  # Up to 30% penalty
+                    confidence = confidence * (1.0 - penalty)
+                    print(f"  ⚠️  Disagreement penalty applied: {penalty*100:.1f}% (opposing confidence: {opposing_confidence:.3f})")
             else:
                 confidence = 0.3  # Low confidence if no agents agree
         else:
@@ -871,6 +935,11 @@ class OrchestratorAgent(BaseAgent):
             avg_confidence = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                 for name, s in agent_signals.items()) / total_weight if total_weight > 0 else 0.0
             confidence = min(avg_confidence, 0.5)  # Cap HOLD confidence at 0.5
+        
+        # Log confidence calculation for transparency
+        print(f"  📊 Confidence calculation: normalized_score={normalized_score:.4f}, final_confidence={confidence:.4f}")
+        if final_signal != Signal.HOLD:
+            print(f"     Agreeing agents: {buy_count if final_signal == Signal.BUY else sell_count}, Opposing: {sell_count if final_signal == Signal.BUY else buy_count}")
         
         # Calculate average confidence for safety checks (used if needed)
         avg_confidence_all = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
@@ -1051,6 +1120,9 @@ Respond in JSON format:
             llm_confidence = None
             llm_reasoning = reasoning_text
             
+            # Initialize sentiment_score before use (fixes variable scope error)
+            sentiment_score = result.get('sentiment', 0.0)
+            
             # Try to extract JSON from reasoning
             import json
             import re
@@ -1085,8 +1157,7 @@ Respond in JSON format:
                 elif 'sell' in reasoning_lower and 'buy' not in reasoning_lower:
                     llm_signal = Signal.SELL
                 else:
-                    # Use sentiment score as fallback
-                    sentiment_score = result.get('sentiment', 0.0)
+                    # Use sentiment score as fallback (already initialized above)
                     if abs(sentiment_score) > 0.3:
                         llm_signal = Signal.BUY if sentiment_score > 0 else Signal.SELL
                     else:

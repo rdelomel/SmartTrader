@@ -306,10 +306,30 @@ class TechnicalAnalystAgent(BaseAgent):
         }
         
         # Extract stop loss and take profit from strongest pattern if available
+        # CRITICAL: Only use pattern SL/TP if pattern direction matches final signal direction
         if patterns:
             strongest_pattern = patterns[0]
-            result['stop_loss'] = strongest_pattern.get('stop_loss')
-            result['take_profit'] = strongest_pattern.get('target')
+            pattern_direction = strongest_pattern.get('direction', '').upper()
+            
+            # Determine pattern signal direction
+            pattern_signal = Signal.HOLD
+            if 'BUY' in pattern_direction or 'BULLISH' in pattern_direction or 'LONG' in pattern_direction:
+                pattern_signal = Signal.BUY
+            elif 'SELL' in pattern_direction or 'BEARISH' in pattern_direction or 'SHORT' in pattern_direction:
+                pattern_signal = Signal.SELL
+            
+            # Only use pattern SL/TP if direction matches final signal
+            if pattern_signal == final_signal and pattern_signal != Signal.HOLD:
+                result['stop_loss'] = strongest_pattern.get('stop_loss')
+                result['take_profit'] = strongest_pattern.get('target')
+                print(f"  ✅ Using pattern SL/TP (pattern direction matches final signal: {pattern_signal.name})")
+            else:
+                # Pattern direction doesn't match - don't use pattern SL/TP
+                # Orchestrator will calculate based on final signal direction
+                result['stop_loss'] = None
+                result['take_profit'] = None
+                if pattern_signal != Signal.HOLD:
+                    print(f"  ⚠️  Pattern direction ({pattern_signal.name}) doesn't match final signal ({final_signal.name}) - SL/TP will be recalculated")
         
         return result
     
