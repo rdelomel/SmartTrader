@@ -732,12 +732,11 @@ class OrchestratorAgent(BaseAgent):
             final_signal = Signal.HOLD
             
             # Tie-breaking logic: If there's a strong signal (confidence > 0.7) and opposing signals are weaker
-            # Find strongest signal and its confidence
+            # First, find strongest signal and its confidence
             max_confidence = 0.0
             max_confidence_signal = None
             max_confidence_agent = None
             
-            opposing_confidences = []
             for agent_name, signal in filtered_signals.items():
                 agent_confidence = signal.get('confidence', 0.0)
                 agent_signal = signal['signal']
@@ -746,8 +745,14 @@ class OrchestratorAgent(BaseAgent):
                     max_confidence = agent_confidence
                     max_confidence_signal = agent_signal
                     max_confidence_agent = agent_name
+            
+            # Now collect opposing signal confidences (after we know what the max signal is)
+            opposing_confidences = []
+            for agent_name, signal in filtered_signals.items():
+                agent_confidence = signal.get('confidence', 0.0)
+                agent_signal = signal['signal']
                 
-                # Collect opposing signal confidences
+                # Collect opposing signal confidences (signals that disagree with max_confidence_signal)
                 if agent_signal != max_confidence_signal and agent_signal != Signal.HOLD:
                     opposing_confidences.append(agent_confidence)
             
