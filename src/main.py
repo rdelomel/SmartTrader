@@ -1003,6 +1003,13 @@ class TradingAgent:
                     balance_info = b.get_account_balance()
                     total_bal = balance_info.get('total', 0.0)
                     avail_bal = balance_info.get('available', balance_info.get('buying_power', total_bal))
+                    
+                    # Validate: available should not exceed total (unless leverage is intentional)
+                    if avail_bal > total_bal * 1.1:  # More than 10% over (likely leverage)
+                        print(f"  ⚠️  WARNING [{broker_name}]: Available balance (${avail_bal:.2f}) > Total (${total_bal:.2f}) - likely leverage")
+                        print(f"     Using conservative available balance: ${total_bal * 0.95:.2f}")
+                        avail_bal = total_bal * 0.95  # Use 95% of total as conservative estimate
+                    
                     account_balance += total_bal
                     available_balance += avail_bal
                 except:
@@ -1254,6 +1261,16 @@ class TradingAgent:
             # CRITICAL: Check portfolio-level exposure limits BEFORE placing order
             # This prevents opening positions that exceed total portfolio exposure limits
             if hasattr(self, 'portfolio_risk_manager') and self.portfolio_risk_manager:
+                # Use actual cash balance (not leveraged buying power) for exposure calculations
+                # account_balance should already be validated, but ensure we're using cash
+                exposure_base_balance = account_balance
+                
+                # Validate: If available_balance > account_balance, we might have leverage
+                # Use the smaller of the two for conservative exposure calculation
+                if available_balance > account_balance * 1.1:
+                    print(f"  ⚠️  WARNING: Available balance (${available_balance:.2f}) > Total (${account_balance:.2f}) - using conservative balance for exposure")
+                    exposure_base_balance = account_balance  # Use total, not available (which includes leverage)
+                
                 # Get current open positions from brokers to calculate total exposure
                 # Use a set to deduplicate positions (Alpaca is stored as both 'stocks' and 'crypto')
                 current_exposure = 0.0
@@ -1314,9 +1331,14 @@ class TradingAgent:
                         except Exception as e:
                             print(f"  ⚠️  Error getting positions from {broker_name} for portfolio check: {e}")
                 
-                current_exposure_pct = (current_exposure / account_balance * 100) if account_balance > 0 else 0.0
+                current_exposure_pct = (current_exposure / exposure_base_balance * 100) if exposure_base_balance > 0 else 0.0
                 proposed_total_exposure = current_exposure + order_value
-                proposed_exposure_pct = (proposed_total_exposure / account_balance * 100) if account_balance > 0 else 0.0
+                proposed_exposure_pct = (proposed_total_exposure / exposure_base_balance * 100) if exposure_base_balance > 0 else 0.0
+                
+                # Validation: If calculated exposure > base balance, something is wrong
+                if proposed_total_exposure > exposure_base_balance * 1.5:
+                    print(f"  ⚠️  WARNING: Calculated exposure (${proposed_total_exposure:.2f}) > Base balance (${exposure_base_balance:.2f}) - using conservative estimate")
+                    proposed_exposure_pct = min(proposed_exposure_pct, 100.0)  # Cap at 100%
                 max_exposure_pct = self.portfolio_risk_manager.max_portfolio_exposure
                 
                 print(f"\n  [PORTFOLIO RISK CHECK]")
@@ -1330,8 +1352,8 @@ class TradingAgent:
                 
                 # Check if adding this position would exceed portfolio exposure limit
                 if proposed_exposure_pct > max_exposure_pct:
-                    # Calculate maximum allowed position value
-                    max_exposure_value = account_balance * (max_exposure_pct / 100)
+                    # Calculate maximum allowed position value using exposure_base_balance (cash, not leveraged)
+                    max_exposure_value = exposure_base_balance * (max_exposure_pct / 100)
                     remaining_capacity = max(0, max_exposure_value - current_exposure)
                     
                     print(f"    ❌ PORTFOLIO EXPOSURE LIMIT EXCEEDED!")
@@ -1416,6 +1438,20 @@ class TradingAgent:
             order_status = order_result.get('status', OrderStatus.REJECTED if error_msg else OrderStatus.PENDING)
             
             if order_id:
+                # Get executed quantity from broker (may differ from calculated due to rounding)
+                filled_quantity = order_result.get('filled_quantity', quantity)
+                executed_price = order_result.get('price', entry_price)
+                
+                # Log quantity mismatch if significant
+                if abs(filled_quantity - quantity) > 0.01:
+                    print(f"  ⚠️  Quantity mismatch: Calculated={quantity:.4f}, Executed={filled_quantity:.4f} (difference: {abs(filled_quantity - quantity):.4f})")
+                    quantity = filled_quantity  # Use executed quantity for consistency
+                
+                # Use executed price if available (may differ from expected due to slippage)
+                if executed_price and abs(executed_price - entry_price) > 0.01:
+                    print(f"  ⚠️  Price difference: Expected=${entry_price:.2f}, Executed=${executed_price:.2f} (slippage: {abs(executed_price - entry_price):.2f})")
+                    entry_price = executed_price
+                
                 # CRITICAL: Ensure stop_loss and take_profit are never None before storing
                 # If they're None, calculate emergency fallbacks
                 if stop_loss is None:
@@ -1437,13 +1473,13 @@ class TradingAgent:
                             take_profit = entry_price - reward
                         print(f"  ⚠️  EMERGENCY: Set take profit to ${take_profit:.2f} (1:2 R/R)")
                 
-                # Successful order - store as open trade
+                # Successful order - store as open trade with EXECUTED quantity and price
                 trade_data = {
                     'trade_id': order_id,
                     'symbol': symbol,
                     'side': side.value if hasattr(side, 'value') else str(side),
-                    'quantity': quantity,
-                    'entry_price': entry_price,
+                    'quantity': filled_quantity,  # Use executed quantity, not calculated
+                    'entry_price': entry_price,  # Use executed price if available
                     'entry_time': datetime.now(),
                     'status': 'open',
                     'stop_loss': stop_loss,

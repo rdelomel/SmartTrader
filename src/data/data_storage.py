@@ -362,7 +362,37 @@ class DataStorage:
             trade_id_str = self._ensure_trade_id_string(trade_id) or f"trade_{datetime.now().timestamp()}"
             existing_trade = session.query(Trade).filter_by(trade_id=trade_id_str).first()
             if existing_trade:
-                # Trade already exists, return existing ID
+                # Trade already exists - update if stop_loss/take_profit are missing
+                needs_update = False
+                update_data = {}
+                
+                # Update stop_loss if provided and currently missing
+                if trade_data.get('stop_loss') is not None and existing_trade.stop_loss is None:
+                    update_data['stop_loss'] = trade_data['stop_loss']
+                    needs_update = True
+                
+                # Update take_profit if provided and currently missing
+                if trade_data.get('take_profit') is not None and existing_trade.take_profit is None:
+                    update_data['take_profit'] = trade_data['take_profit']
+                    needs_update = True
+                
+                # Also update if new values are different (in case they were set incorrectly)
+                if trade_data.get('stop_loss') is not None and existing_trade.stop_loss is not None:
+                    if abs(existing_trade.stop_loss - trade_data['stop_loss']) > 0.01:
+                        update_data['stop_loss'] = trade_data['stop_loss']
+                        needs_update = True
+                
+                if trade_data.get('take_profit') is not None and existing_trade.take_profit is not None:
+                    if abs(existing_trade.take_profit - trade_data['take_profit']) > 0.01:
+                        update_data['take_profit'] = trade_data['take_profit']
+                        needs_update = True
+                
+                if needs_update:
+                    for key, value in update_data.items():
+                        setattr(existing_trade, key, value)
+                    session.commit()
+                    print(f"  ✅ Updated existing trade {existing_trade.id} (trade_id: {trade_id_str}) with SL/TP values: {update_data}")
+                
                 return existing_trade.id
             
             trade = Trade(

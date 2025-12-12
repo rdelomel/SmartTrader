@@ -230,14 +230,48 @@ class CircuitBreaker:
             if not should_reset and hasattr(self, 'peak_equity_time') and self.peak_equity_time:
                 days_since_peak = (timestamp - self.peak_equity_time).total_seconds() / 86400
                 
-                # Aggressive reset: If drawdown exceeds max AND peak is stale (even slightly), reset it
-                # This prevents stale peaks from blocking trading
+                # Check if drawdown exceeds limit
                 if current_drawdown >= self.max_drawdown:
                     # If drawdown exceeds limit, check if peak is stale
-                    if days_since_peak > 0.5:  # More than 12 hours old
+                    if days_since_peak > 0.5:  # More than 12 hours old - likely stale
                         should_reset = True
                         reset_reason = f"drawdown ({current_drawdown:.2f}%) exceeds limit ({self.max_drawdown:.2f}%) and peak is stale ({days_since_peak:.1f} days old)"
-                    elif days_since_peak > 1 and current_drawdown > 5.0:
+                    else:
+                        # Peak is recent (< 12 hours) - this is a REAL drawdown, trigger circuit breaker
+                        # Don't reset, trigger instead
+                        if current_drawdown > 10.0:
+                            # Major drawdown (>10%) with recent peak - definitely trigger
+                            self.triggered = True
+                            self.triggered_at = timestamp
+                            self.trigger_reason = f"Major drawdown {current_drawdown:.2f}% exceeds limit {self.max_drawdown:.2f}% (peak is recent, not stale)"
+                            print(f"Circuit Breaker: TRIGGERED - {self.trigger_reason}")
+                            return {
+                                'triggered': True,
+                                'reason': self.trigger_reason,
+                                'drawdown': current_drawdown,
+                                'peak_equity': self.peak_equity,
+                                'current_equity': current_equity
+                            }
+                        else:
+                            # Drawdown between max_drawdown and 10% - check if peak is very recent
+                            hours_since_peak = days_since_peak * 24
+                            if hours_since_peak < 2:  # Peak is less than 2 hours old - likely real drawdown
+                                self.triggered = True
+                                self.triggered_at = timestamp
+                                self.trigger_reason = f"Drawdown {current_drawdown:.2f}% exceeds limit {self.max_drawdown:.2f}% (peak is recent: {hours_since_peak:.1f} hours old)"
+                                print(f"Circuit Breaker: TRIGGERED - {self.trigger_reason}")
+                                return {
+                                    'triggered': True,
+                                    'reason': self.trigger_reason,
+                                    'drawdown': current_drawdown,
+                                    'peak_equity': self.peak_equity,
+                                    'current_equity': current_equity
+                                }
+                            else:
+                                # Peak is 2-12 hours old, might be stale - reset
+                                should_reset = True
+                                reset_reason = f"drawdown ({current_drawdown:.2f}%) exceeds limit ({self.max_drawdown:.2f}%) but peak is moderately stale ({hours_since_peak:.1f} hours old)"
+                    if days_since_peak > 1 and current_drawdown > 5.0:
                         should_reset = True
                         reset_reason = f"stale peak ({days_since_peak:.1f} days old) causing significant drawdown ({current_drawdown:.2f}%)"
                 elif days_since_peak > 1 and current_drawdown > 5.0:
@@ -248,11 +282,27 @@ class CircuitBreaker:
                     reset_reason = "account recovered to within 5% of peak"
             elif not should_reset:
                 # No peak_equity_time set - likely stale peak from before this feature
-                # If drawdown is high, reset it to allow trading
+                # If drawdown is high, check if it's real or stale
                 if current_drawdown >= self.max_drawdown:
-                    should_reset = True
-                    reset_reason = f"drawdown ({current_drawdown:.2f}%) exceeds limit ({self.max_drawdown:.2f}%) and peak has no timestamp (stale)"
+                    # If drawdown > 10%, likely real - trigger
+                    if current_drawdown > 10.0:
+                        self.triggered = True
+                        self.triggered_at = timestamp
+                        self.trigger_reason = f"Major drawdown {current_drawdown:.2f}% exceeds limit {self.max_drawdown:.2f}% (no peak timestamp - treating as real)"
+                        print(f"Circuit Breaker: TRIGGERED - {self.trigger_reason}")
+                        return {
+                            'triggered': True,
+                            'reason': self.trigger_reason,
+                            'drawdown': current_drawdown,
+                            'peak_equity': self.peak_equity,
+                            'current_equity': current_equity
+                        }
+                    else:
+                        # Drawdown between max and 10%, no timestamp - assume stale and reset
+                        should_reset = True
+                        reset_reason = f"drawdown ({current_drawdown:.2f}%) exceeds limit ({self.max_drawdown:.2f}%) and peak has no timestamp (stale)"
             
+            # Only reset if should_reset is True (stale data case)
             if should_reset:
                 print(f"Circuit Breaker: Auto-resetting peak equity - {reset_reason}")
                 print(f"  Old peak: ${self.peak_equity:,.2f} -> New peak: ${current_equity:,.2f}")
@@ -262,6 +312,20 @@ class CircuitBreaker:
                 else:
                     self.peak_equity_time = timestamp
                 current_drawdown = 0.0
+            elif current_drawdown >= self.max_drawdown:
+                # Drawdown exceeds limit but we didn't reset - must be real drawdown
+                # This should have been caught above, but add safety check
+                self.triggered = True
+                self.triggered_at = timestamp
+                self.trigger_reason = f"Drawdown {current_drawdown:.2f}% exceeds limit {self.max_drawdown:.2f}%"
+                print(f"Circuit Breaker: TRIGGERED - {self.trigger_reason}")
+                return {
+                    'triggered': True,
+                    'reason': self.trigger_reason,
+                    'drawdown': current_drawdown,
+                    'peak_equity': self.peak_equity,
+                    'current_equity': current_equity
+                }
                 print(f"Circuit Breaker: ✅ Reset complete - trading can resume")
             elif current_drawdown >= self.max_drawdown:
                 # Only trigger if we didn't reset

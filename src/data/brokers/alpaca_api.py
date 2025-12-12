@@ -200,15 +200,36 @@ class AlpacaBroker(BaseBroker):
             response.raise_for_status()
             account = response.json()
             
+            portfolio_value = float(account['portfolio_value'])
+            buying_power = float(account['buying_power'])
+            cash = float(account.get('cash', account.get('non_marginable_buying_power', buying_power)))
+            
+            # Use cash (actual money) instead of buying_power (which includes margin/leverage)
+            # If cash is not available, use non_marginable_buying_power as fallback
+            # Only use buying_power if neither cash nor non_marginable_buying_power is available
+            if 'cash' in account:
+                available = cash
+            elif 'non_marginable_buying_power' in account:
+                available = float(account['non_marginable_buying_power'])
+            else:
+                # Fallback to buying_power, but warn if it's higher than portfolio_value (leverage)
+                available = buying_power
+                if available > portfolio_value * 1.1:
+                    print(f"  ⚠️  WARNING: Buying power (${available:.2f}) > Portfolio value (${portfolio_value:.2f}) - likely leverage")
+                    print(f"     Using conservative available balance: ${portfolio_value * 0.95:.2f}")
+                    available = portfolio_value * 0.95  # Use 95% of portfolio value as conservative estimate
+            
+            used = portfolio_value - available
+            
             return {
-                'total': float(account['portfolio_value']),
-                'available': float(account['buying_power']),
-                'used': float(account['portfolio_value']) - float(account['buying_power']),
+                'total': portfolio_value,
+                'available': available,
+                'used': used,
                 'currencies': {
                     'USD': {
-                        'total': float(account['portfolio_value']),
-                        'available': float(account['buying_power']),
-                        'used': float(account['portfolio_value']) - float(account['buying_power'])
+                        'total': portfolio_value,
+                        'available': available,
+                        'used': used
                     }
                 }
             }

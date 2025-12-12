@@ -772,8 +772,31 @@ class OrchestratorAgent(BaseAgent):
                     final_signal = max_confidence_signal
                     print(f"  ⚡ Strong signal override: {max_confidence_agent} ({max_confidence_signal.name}, confidence={max_confidence:.3f}) overrides weak opposing signals")
             
-            # LLM conflict resolution: Use LLM to reason about conflicts when tie-breaking didn't resolve
-            if final_signal == Signal.HOLD and abs(normalized_score) < threshold * 1.2:
+            # CRITICAL: Check for strong conflict between sentiment and technical signals
+            # If they strongly disagree, always use LLM resolution (user requirement)
+            sentiment_signal = filtered_signals.get('sentiment')
+            technical_signal = filtered_signals.get('technical')
+            force_llm = False
+            
+            if sentiment_signal and technical_signal:
+                sentiment_conf = sentiment_signal.get('confidence', 0)
+                technical_conf = technical_signal.get('confidence', 0)
+                sentiment_sig = sentiment_signal.get('signal')
+                technical_sig = technical_signal.get('signal')
+                
+                # Strong conflict: opposite signals with both having decent confidence (>0.3)
+                if (sentiment_sig != technical_sig and 
+                    sentiment_sig != Signal.HOLD and 
+                    technical_sig != Signal.HOLD and
+                    sentiment_conf > 0.3 and technical_conf > 0.3):
+                    
+                    print(f"  ⚠️  STRONG CONFLICT DETECTED: Sentiment {sentiment_sig.name} (confidence: {sentiment_conf:.3f}) vs Technical {technical_sig.name} (confidence: {technical_conf:.3f})")
+                    print(f"     Forcing LLM conflict resolution (user requirement: always use LLM when sentiment and technical disagree)")
+                    force_llm = True
+            
+            # LLM conflict resolution: Use LLM to reason about conflicts
+            # Either when tie-breaking didn't resolve OR when sentiment/technical strongly conflict
+            if force_llm or (final_signal == Signal.HOLD and abs(normalized_score) < threshold * 1.2):
                 llm_result = self._llm_resolve_conflicts(
                     filtered_signals, normalized_score, threshold, 
                     regime_result=regime_result, market_data=market_data
@@ -787,10 +810,21 @@ class OrchestratorAgent(BaseAgent):
                     # Use LLM recommendation if confidence is reasonable
                     if llm_confidence > 0.4:
                         final_signal = llm_signal
-                        print(f"  ✅ LLM recommendation accepted: {llm_signal.name} (confidence: {llm_confidence:.3f})")
+                        if force_llm:
+                            print(f"  ✅ LLM conflict resolution (forced): {llm_signal.name} (confidence: {llm_confidence:.3f})")
+                        else:
+                            print(f"  ✅ LLM recommendation accepted: {llm_signal.name} (confidence: {llm_confidence:.3f})")
                         print(f"     Reasoning: {llm_reasoning[:150]}...")
                     else:
-                        print(f"  ⚠️  LLM recommendation rejected (low confidence: {llm_confidence:.3f}), keeping HOLD")
+                        if force_llm:
+                            print(f"  ⚠️  LLM conflict resolution returned low confidence ({llm_confidence:.3f}) - using LLM signal anyway due to strong conflict")
+                            final_signal = llm_signal  # Use LLM signal even if low confidence when forced
+                        else:
+                            print(f"  ⚠️  LLM recommendation rejected (low confidence: {llm_confidence:.3f}), keeping HOLD")
+                elif force_llm:
+                    # LLM resolution failed but we need it - fall back to weighted voting but log warning
+                    print(f"  ⚠️  WARNING: LLM conflict resolution failed but conflict detected - using weighted voting result")
+                    print(f"     This is risky: sentiment and technical disagree significantly")
         
         # Calculate confidence based on agreeing agents' confidences
         # For BUY/SELL: use weighted average of agreeing agents' confidences
