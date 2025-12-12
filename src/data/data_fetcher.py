@@ -153,22 +153,55 @@ class DataFetcher:
         )
         
         # If we have recent data, return it
+        hours_ago = 999  # Default to very old if no stored data
         if stored_data:
             latest_timestamp = max(d['timestamp'] for d in stored_data)
-            hours_ago = (datetime.now() - latest_timestamp).total_seconds() / 3600
+            # Handle timezone-aware and naive timestamps
+            if latest_timestamp.tzinfo is None:
+                latest_timestamp = latest_timestamp.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            hours_ago = (now - latest_timestamp).total_seconds() / 3600
             
             # If data is less than 1 hour old, return it
             if hours_ago < 1:
                 return stored_data
         
-        # Otherwise, fetch fresh data
-        self.fetch_and_store(symbol, timeframe, start_date, end_date)
+        # Otherwise, fetch fresh data with retry logic
+        max_retries = 3
+        retry_delay = 1  # seconds
         
-        # Return from storage
-        return self.storage.get_ohlcv_data(
-            symbol=symbol,
-            timeframe=timeframe,
-            start_date=start_date,
-            end_date=end_date
-        )
+        for attempt in range(max_retries):
+            try:
+                self.fetch_and_store(symbol, timeframe, start_date, end_date)
+                # Return from storage
+                fresh_data = self.storage.get_ohlcv_data(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                if fresh_data:
+                    return fresh_data
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"  ⚠️  Data fetch attempt {attempt + 1} failed for {symbol} {timeframe}: {e}")
+                    print(f"     Retrying in {retry_delay} seconds...")
+                    import time
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    print(f"  ❌ Failed to fetch data for {symbol} {timeframe} after {max_retries} attempts: {e}")
+                    # Fallback to cached data even if stale
+                    if stored_data:
+                        print(f"  ⚠️  Using stale cached data (last updated {hours_ago:.1f} hours ago)")
+                        return stored_data
+        
+        # Final fallback: return cached data if available, even if stale
+        if stored_data:
+            print(f"  ⚠️  Using cached data (may be stale, {hours_ago:.1f} hours old)")
+            return stored_data
+        
+        # No data available at all
+        print(f"  ❌ No data available for {symbol} {timeframe}")
+        return []
 

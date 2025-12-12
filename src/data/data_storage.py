@@ -357,7 +357,47 @@ class DataStorage:
         try:
             trade_id = trade_data.get('trade_id', f"trade_{datetime.now().timestamp()}")
             
-            # Check if trade already exists
+            # CRITICAL: Check for existing open position with same (symbol, side, entry_price)
+            # This prevents duplicate positions when same order is processed multiple times
+            symbol = trade_data.get('symbol')
+            side = trade_data.get('side')
+            entry_price = trade_data.get('entry_price')
+            
+            if symbol and side and entry_price:
+                existing_open = session.query(Trade).filter(
+                    Trade.symbol == symbol,
+                    Trade.side == side,
+                    Trade.status == 'open',
+                    abs(Trade.entry_price - entry_price) < entry_price * 0.01  # Within 1%
+                ).first()
+                
+                if existing_open:
+                    print(f"  ⚠️  Duplicate open position detected: {symbol} {side} @ ${entry_price:.2f}")
+                    print(f"     Updating existing trade {existing_open.id} instead of creating duplicate")
+                    
+                    # Update existing trade with new SL/TP if provided
+                    needs_update = False
+                    update_data = {}
+                    
+                    if trade_data.get('stop_loss') is not None:
+                        if existing_open.stop_loss is None or abs(existing_open.stop_loss - trade_data['stop_loss']) > 0.01:
+                            update_data['stop_loss'] = trade_data['stop_loss']
+                            needs_update = True
+                    
+                    if trade_data.get('take_profit') is not None:
+                        if existing_open.take_profit is None or abs(existing_open.take_profit - trade_data['take_profit']) > 0.01:
+                            update_data['take_profit'] = trade_data['take_profit']
+                            needs_update = True
+                    
+                    if needs_update:
+                        for key, value in update_data.items():
+                            setattr(existing_open, key, value)
+                        session.commit()
+                        print(f"  ✅ Updated duplicate position {existing_open.id} with SL/TP values: {update_data}")
+                    
+                    return existing_open.id
+            
+            # Check if trade already exists by trade_id
             # Ensure trade_id is a string
             trade_id_str = self._ensure_trade_id_string(trade_id) or f"trade_{datetime.now().timestamp()}"
             existing_trade = session.query(Trade).filter_by(trade_id=trade_id_str).first()

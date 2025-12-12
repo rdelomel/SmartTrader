@@ -58,9 +58,11 @@ class OrchestratorAgent(BaseAgent):
         self.sentiment_analyzer = sentiment_analyzer  # For LLM conflict resolution
         
         # Decision tree thresholds (used as fallback)
-        self.min_confidence = self.config.get('min_confidence', 0.5)
+        self.min_confidence = self.config.get('min_confidence', 0.70)  # Raised from 0.40/0.50 to 0.70
         self.consensus_threshold = self.config.get('consensus_threshold', 0.6)
         self.veto_enabled = self.config.get('veto_enabled', True)
+        self.require_agent_agreement = self.config.get('require_agent_agreement', True)  # Require 2+ agents to agree
+        self.disable_short_trades = self.config.get('disable_short_trades', True)  # Disable shorts (0% win rate)
         
         # DRL mode
         self.use_drl = self.config.get('use_drl', True) and drl_agent is not None and drl_agent.is_trained
@@ -248,31 +250,38 @@ class OrchestratorAgent(BaseAgent):
                 stop_loss = agent_signals.get('technical', {}).get('stop_loss')
                 take_profit = agent_signals.get('technical', {}).get('take_profit')
                 
-                # CRITICAL FIX: Validate stop_loss and take_profit match the signal direction
-                # Pattern detection may provide values for the pattern's direction, but the final
-                # signal might be different. We must ensure stop_loss/take_profit are correct.
+                # CRITICAL FIX: Always validate and recalculate SL/TP if they don't match signal direction
+                # Even if technical agent provided values, we must ensure they're correct for final signal
                 is_buy = final_signal['signal'] == Signal.BUY
+                
+                # Track where inverted SL/TP came from for debugging
+                sl_source = "technical_agent" if stop_loss else None
+                tp_source = "technical_agent" if take_profit else None
                 
                 if stop_loss:
                     # Validate stop_loss is correct for the signal direction
                     if is_buy and stop_loss > entry_price:
                         # Stop loss is above entry for a BUY - this is wrong!
-                        print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is above entry ${entry_price:.2f} for BUY signal. Recalculating...")
+                        print(f"  ❌ CRITICAL: Stop loss ${stop_loss:.2f} is above entry ${entry_price:.2f} for BUY signal (source: {sl_source})")
+                        print(f"     Recalculating stop loss based on signal direction...")
                         stop_loss = None  # Force recalculation
                     elif not is_buy and stop_loss < entry_price:
                         # Stop loss is below entry for a SELL - this is wrong!
-                        print(f"  ⚠️  WARNING: Stop loss ${stop_loss:.2f} is below entry ${entry_price:.2f} for SELL signal. Recalculating...")
+                        print(f"  ❌ CRITICAL: Stop loss ${stop_loss:.2f} is below entry ${entry_price:.2f} for SELL signal (source: {sl_source})")
+                        print(f"     Recalculating stop loss based on signal direction...")
                         stop_loss = None  # Force recalculation
                 
                 if take_profit:
                     # Validate take_profit is correct for the signal direction
                     if is_buy and take_profit < entry_price:
                         # Take profit is below entry for a BUY - this is wrong!
-                        print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is below entry ${entry_price:.2f} for BUY signal. Recalculating...")
+                        print(f"  ❌ CRITICAL: Take profit ${take_profit:.2f} is below entry ${entry_price:.2f} for BUY signal (source: {tp_source})")
+                        print(f"     Recalculating take profit based on signal direction...")
                         take_profit = None  # Force recalculation
                     elif not is_buy and take_profit > entry_price:
                         # Take profit is above entry for a SELL - this is wrong!
-                        print(f"  ⚠️  WARNING: Take profit ${take_profit:.2f} is above entry ${entry_price:.2f} for SELL signal. Recalculating...")
+                        print(f"  ❌ CRITICAL: Take profit ${take_profit:.2f} is above entry ${entry_price:.2f} for SELL signal (source: {tp_source})")
+                        print(f"     Recalculating take profit based on signal direction...")
                         take_profit = None  # Force recalculation
                 
                 if not stop_loss:
@@ -655,13 +664,20 @@ class OrchestratorAgent(BaseAgent):
             }
         
         # Base weights (normalized to sum to 1.0)
+        # CRITICAL: Adjusted to reduce sentiment dominance and increase technical importance
+        # Technical increased from 0.30 to 0.80, Sentiment reduced from 1.2 (after multiplier) to 0.60
         base_weights = {
-            'technical': 0.30,
-            'sentiment': 0.20,
-            'fundamental': 0.20,
-            'quantitative': 0.15,
-            'pattern_forecaster': 0.15
+            'technical': self.config.get('technical_weight', 0.80),  # Increased from 0.30
+            'sentiment': self.config.get('sentiment_weight', 0.60),  # Reduced from 1.2 (effective weight)
+            'fundamental': self.config.get('fundamental_weight', 0.20),
+            'quantitative': self.config.get('quantitative_weight', 0.15),
+            'pattern_forecaster': self.config.get('pattern_forecaster_weight', 0.25)
         }
+        
+        # Normalize weights to sum to 1.0
+        total_base_weight = sum(base_weights.values())
+        if total_base_weight > 0:
+            base_weights = {k: v / total_base_weight for k, v in base_weights.items()}
         
         # Filter out agents with zero confidence (they're not contributing)
         # This fixes the fundamental agent issue
@@ -944,6 +960,15 @@ class OrchestratorAgent(BaseAgent):
         # Calculate average confidence for safety checks (used if needed)
         avg_confidence_all = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                 for name, s in agent_signals.items()) / total_weight if total_weight > 0 else 0.0
+        
+        # CRITICAL: Require at least 2 agents to agree (not just one strong signal)
+        if self.require_agent_agreement and final_signal != Signal.HOLD:
+            agreeing_count = buy_count if final_signal == Signal.BUY else sell_count
+            if agreeing_count < 2:
+                print(f"  ⚠️  Insufficient agreement: Only {agreeing_count} agent(s) agree, need at least 2")
+                print(f"     Rejecting trade - require multiple agent agreement for higher quality signals")
+                final_signal = Signal.HOLD
+                confidence = 0.0
         
         # Safety check: If all agents agree on SELL but we got BUY, something is wrong
         # (buy_count, sell_count, hold_count already calculated above)

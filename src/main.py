@@ -1225,6 +1225,13 @@ class TradingAgent:
             
             # Determine order side and entry price first (needed for position sizing)
             signal = decision['signal']
+            # CRITICAL: Disable SHORT trades if configured (0% win rate on shorts)
+            disable_shorts = self.config.get('disable_short_trades', True)
+            if disable_shorts and (signal == Signal.SELL or (hasattr(signal, 'value') and signal.value == -1)):
+                print(f"  ❌ REJECTED: SHORT trades are disabled (0% win rate)")
+                print(f"     Signal was SELL, but shorts are disabled by configuration")
+                return
+            
             side = OrderSide.BUY if signal == Signal.BUY or (hasattr(signal, 'value') and signal.value == 1) else OrderSide.SELL
             entry_price = decision.get('entry_price', data['close'].iloc[-1])
             stop_loss = decision.get('stop_loss')

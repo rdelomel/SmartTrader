@@ -28,20 +28,43 @@ class CircuitBreaker:
         self.equity_history = deque(maxlen=1000)  # Store (timestamp, equity) tuples
         self.peak_equity = None
         self.peak_equity_time = None
+        
+        # Single source of truth for equity (cached with timestamp)
+        self._cached_equity = None
+        self._cached_equity_timestamp = None
+        self._equity_cache_ttl = 60  # Cache for 60 seconds
+        
         self.triggered = False
         self.triggered_at = None
         self.trigger_reason = None
     
-    def update_equity(self, equity: float, timestamp: Optional[datetime] = None):
+    def update_equity(self, equity: float, timestamp: Optional[datetime] = None, verify_with_broker: bool = False):
         """
         Update equity and check circuit breakers
         
         Args:
             equity: Current equity value
             timestamp: Timestamp of update (default: now)
+            verify_with_broker: If True and equity changes >50%, verify with broker before triggering
         """
         if timestamp is None:
             timestamp = datetime.now()
+        
+        # CRITICAL: Validate large equity changes (>50%) - might be calculation error
+        if self._cached_equity is not None and self._cached_equity > 0:
+            equity_change_pct = abs(equity - self._cached_equity) / self._cached_equity * 100
+            if equity_change_pct > 50.0:
+                print(f"  ⚠️  WARNING: Large equity change detected: {equity_change_pct:.1f}% ({self._cached_equity:.2f} -> {equity:.2f})")
+                if verify_with_broker:
+                    print(f"     This may be a calculation error - verify with broker before triggering circuit breaker")
+                    # Don't update equity if it's likely an error
+                    return
+                else:
+                    print(f"     Proceeding with equity update (not verified with broker)")
+        
+        # Update cached equity
+        self._cached_equity = equity
+        self._cached_equity_timestamp = timestamp
         
         # CRITICAL: Check for real drawdowns BEFORE clearing history
         # If equity drops significantly, trigger circuit breaker, don't just clear history
