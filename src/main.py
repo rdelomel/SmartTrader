@@ -233,6 +233,17 @@ class TradingAgent:
             
             # Initialize Multi-Agent Framework
             print(f"[INIT] Initializing agents...")
+            
+            # Initialize Performance Tracker first (needed by technical agent)
+            aggressive_config = self.trading_config.get('aggressive_mode', {})
+            if aggressive_config.get('enabled', False):
+                self.performance_tracker = PerformanceTracker({
+                    'target_weekly_return': aggressive_config.get('target_weekly_return', 3.0),
+                    'max_drawdown': aggressive_config.get('max_drawdown', 4.5)
+                })
+            else:
+                self.performance_tracker = None
+            
             # 1. Analytical Agents
             self.technical_agent = TechnicalAnalystAgent(
                 config=self.trading_config.get('agents', {}).get('technical', {}),
@@ -300,16 +311,7 @@ class TradingAgent:
                         except Exception as e:
                             print(f"Error loading DRL model: {e}")
             
-            # 5. Performance Tracker (for aggressive mode) - Initialize before orchestrator
-            if aggressive_config.get('enabled', False):
-                self.performance_tracker = PerformanceTracker({
-                    'target_weekly_return': aggressive_config.get('target_weekly_return', 3.0),
-                    'max_drawdown': aggressive_config.get('max_drawdown', 4.5)
-                })
-            else:
-                self.performance_tracker = None
-            
-            # 6. Orchestrator Agent
+            # 6. Orchestrator Agent (performance_tracker already initialized above)
             orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
             orchestrator_config['use_drl'] = aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True)
             self.orchestrator_agent = OrchestratorAgent(
