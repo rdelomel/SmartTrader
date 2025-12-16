@@ -20,7 +20,7 @@ class CircuitBreaker:
         """
         self.config = config or {}
         self.max_daily_loss = self.config.get('max_daily_loss_percent', 1.5)
-        self.max_hourly_loss = self.config.get('max_hourly_loss_percent', 0.5)
+        self.max_hourly_loss = self.config.get('max_hourly_loss_percent', 0.50)  # Changed from 0.40 to 0.50
         self.max_drawdown = self.config.get('max_drawdown_percent', 4.5)
         self.cooling_period_hours = self.config.get('cooling_period_hours', 4)
         
@@ -38,7 +38,9 @@ class CircuitBreaker:
         self.triggered_at = None
         self.trigger_reason = None
     
-    def update_equity(self, equity: float, timestamp: Optional[datetime] = None, verify_with_broker: bool = False):
+    def update_equity(self, equity: float, timestamp: Optional[datetime] = None, 
+                      verify_with_broker: bool = False, api_available: bool = True, 
+                      data_source: str = 'live'):
         """
         Update equity and check circuit breakers
         
@@ -46,9 +48,21 @@ class CircuitBreaker:
             equity: Current equity value
             timestamp: Timestamp of update (default: now)
             verify_with_broker: If True and equity changes >50%, verify with broker before triggering
+            api_available: True if broker API is responding, False if using cached data
+            data_source: 'live' or 'cached' to indicate data reliability
         """
         if timestamp is None:
             timestamp = datetime.now()
+        
+        # CRITICAL: Don't trigger circuit breaker on cached/stale data
+        if not api_available or data_source == 'cached':
+            print(f"  ⚠️  Equity data from {data_source} source (API available: {api_available}) - skipping circuit breaker check")
+            # Still update history but don't trigger circuit breaker
+            self.equity_history.append((timestamp, equity))
+            if self._cached_equity is None:
+                self._cached_equity = equity
+                self._cached_equity_timestamp = timestamp
+            return {'triggered': False, 'reason': f'Using {data_source} data, API unavailable'}
         
         # CRITICAL: Validate large equity changes (>50%) - might be calculation error
         if self._cached_equity is not None and self._cached_equity > 0:
@@ -58,7 +72,7 @@ class CircuitBreaker:
                 if verify_with_broker:
                     print(f"     This may be a calculation error - verify with broker before triggering circuit breaker")
                     # Don't update equity if it's likely an error
-                    return
+                    return {'triggered': False, 'reason': 'Large equity change requires broker verification'}
                 else:
                     print(f"     Proceeding with equity update (not verified with broker)")
         

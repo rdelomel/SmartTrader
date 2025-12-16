@@ -1152,22 +1152,44 @@ class TradingAgent:
             broker_for_trade = None  # Track which broker will execute this trade
             
             for broker_name, b in self.brokers.items():
+                api_available = True
+                data_source = 'live'
                 try:
                     balance_info = b.get_account_balance()
                     total_bal = balance_info.get('total', 0.0)
                     avail_bal = balance_info.get('available', balance_info.get('buying_power', total_bal))
+                    
+                    # Check if API failed (balance is 0.0 likely means API failure)
+                    if total_bal == 0.0:
+                        api_available = False
+                        data_source = 'cached'
+                        # Check if broker has cached data (for OANDA, check if cache exists)
+                        if hasattr(b, '_last_balance') and b._last_balance:
+                            if hasattr(b, '_last_balance_timestamp') and b._last_balance_timestamp:
+                                age_seconds = (datetime.now() - b._last_balance_timestamp).total_seconds()
+                                if age_seconds < 300:  # 5 minutes
+                                    data_source = 'cached'
+                                    print(f"  ⚠️  {broker_name} API unavailable, using cached balance")
+                                else:
+                                    data_source = 'error'
+                                    print(f"  ❌ {broker_name} API unavailable and cache expired")
+                    
                     account_balance += total_bal
                     available_balance += avail_bal
                     broker_balance_info[broker_name] = balance_info
-                    print(f"  Account balance from {broker_name}: Total=${total_bal:.2f}, Available=${avail_bal:.2f}")
+                    print(f"  Account balance from {broker_name}: Total=${total_bal:.2f}, Available=${avail_bal:.2f} (source: {data_source})")
                     
                     # Update per-broker drawdown manager with this broker's balance
                     if broker_name in self.drawdown_managers:
                         self.drawdown_managers[broker_name].update_equity(total_bal)
                     
-                    # Update per-broker circuit breaker
+                    # Update per-broker circuit breaker with API status
                     if broker_name in self.circuit_breakers:
-                        self.circuit_breakers[broker_name].update_equity(total_bal)
+                        self.circuit_breakers[broker_name].update_equity(
+                            total_bal,
+                            api_available=api_available,
+                            data_source=data_source
+                        )
                     
                     # Update per-broker performance tracker
                     if broker_name in self.performance_trackers and self.performance_trackers[broker_name]:
@@ -1177,7 +1199,16 @@ class TradingAgent:
                     if b == broker:
                         broker_for_trade = broker_name
                 except Exception as e:
+                    api_available = False
+                    data_source = 'error'
                     print(f"  Error getting balance from {broker_name}: {e}")
+                    # Still try to update circuit breaker with error status
+                    if broker_name in self.circuit_breakers:
+                        self.circuit_breakers[broker_name].update_equity(
+                            0.0,
+                            api_available=False,
+                            data_source='error'
+                        )
             
             # Fallback to default if no brokers returned balance
             if account_balance == 0.0:
@@ -1195,11 +1226,19 @@ class TradingAgent:
             if self.performance_tracker:
                 self.performance_tracker.update_equity(account_balance)
             
-            # Update circuit breaker with current equity
+            # Determine overall API status (if any broker API is available, consider it available)
+            overall_api_available = account_balance > 0.0 and account_balance != 10000.0  # If we got real balance (not fallback), at least one API worked
+            overall_data_source = 'live' if overall_api_available else ('cached' if account_balance > 0.0 else 'error')
+            
+            # Update circuit breaker with current equity and API status
             # IMPORTANT: Initialize peak equity if not set (first run or after reset)
             if self.risk_agent and self.risk_agent.circuit_breaker:
                 cb = self.risk_agent.circuit_breaker
-                cb.update_equity(account_balance)
+                cb.update_equity(
+                    account_balance,
+                    api_available=overall_api_available,
+                    data_source=overall_data_source
+                )
                 # If peak equity is None or very different from current, initialize it
                 if cb.peak_equity is None:
                     cb.reset_peak_equity(account_balance)

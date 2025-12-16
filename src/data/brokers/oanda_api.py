@@ -35,6 +35,13 @@ class OANDABroker(BaseBroker):
         # Use session for connection pooling (low latency optimization)
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        
+        # Cache for last known good balance (for API failure resilience)
+        self._last_balance = None
+        self._last_balance_timestamp = None
+        self._last_account_details = None
+        self._last_account_details_timestamp = None
+        self._balance_cache_ttl = 300  # 5 minutes
     
     def connect(self) -> bool:
         """Establish connection to OANDA"""
@@ -235,7 +242,14 @@ class OANDABroker(BaseBroker):
                         continue
                 response.raise_for_status()
                 data = response.json()
-                return data.get('account')
+                account_data = data.get('account')
+                
+                # Cache successful response
+                if account_data:
+                    self._last_account_details = account_data
+                    self._last_account_details_timestamp = datetime.now()
+                
+                return account_data
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -244,6 +258,16 @@ class OANDABroker(BaseBroker):
                 # Only print error on final attempt to reduce noise
                 if attempt == max_retries:
                     print(f"Error fetching account details from OANDA after {max_retries} attempts: {last_error}")
+                
+                # Check if we have cached data that's still valid
+                if self._last_account_details and self._last_account_details_timestamp:
+                    age_seconds = (datetime.now() - self._last_account_details_timestamp).total_seconds()
+                    if age_seconds < self._balance_cache_ttl:
+                        print(f"  ⚠️  OANDA API unavailable, using cached account details (age: {age_seconds:.0f}s)")
+                        return self._last_account_details
+                    else:
+                        print(f"  ⚠️  Cached account details too old ({age_seconds:.0f}s > {self._balance_cache_ttl}s)")
+                
                 break
 
         return None
@@ -261,12 +285,25 @@ class OANDABroker(BaseBroker):
           total     -> balance
           available -> marginAvailable (or balance if missing)
           used      -> total - available
+        
+        Returns cached balance if API fails but cache is recent (< 5 minutes old).
         """
         account = self._get_account_details()
         if not account:
-            # Fallback empty balance on failure (graceful degradation)
+            # API failed - check if we have recent cached balance
+            if self._last_balance and self._last_balance_timestamp:
+                age_seconds = (datetime.now() - self._last_balance_timestamp).total_seconds()
+                if age_seconds < self._balance_cache_ttl:
+                    print(f"  ⚠️  OANDA API unavailable, using cached balance (age: {age_seconds:.0f}s)")
+                    return self._last_balance
+                else:
+                    print(f"  ⚠️  Cached balance too old ({age_seconds:.0f}s > {self._balance_cache_ttl}s)")
+            
+            # No recent cache - return error
+            print(f"  ❌ OANDA API failed and no recent cache available")
             return {'total': 0.0, 'available': 0.0, 'used': 0.0, 'currencies': {}}
 
+        # Success - calculate and cache balance
         balance = float(account.get('balance', 0.0))
         # Prefer marginAvailable, fall back to NAV, then balance
         available = float(
@@ -274,7 +311,7 @@ class OANDABroker(BaseBroker):
         )
         used = balance - available
 
-        return {
+        balance_dict = {
             'total': balance,
             'available': available,
             'used': used,
@@ -286,6 +323,12 @@ class OANDABroker(BaseBroker):
                 }
             }
         }
+        
+        # Cache successful result
+        self._last_balance = balance_dict
+        self._last_balance_timestamp = datetime.now()
+        
+        return balance_dict
     
     def place_order(
         self,

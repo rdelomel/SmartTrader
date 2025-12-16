@@ -201,6 +201,16 @@ class OrchestratorAgent(BaseAgent):
         else:
             print("  Pattern Forecaster Agent: DISABLED")
         
+        # DIAGNOSTIC: Log all agent signals before decision making
+        print("\n[DIAGNOSTIC] Agent Signals Summary:")
+        if not agent_signals:
+            print("  ⚠️  WARNING: No agent signals collected!")
+        else:
+            for agent_name, signal_data in agent_signals.items():
+                sig = signal_data.get('signal', Signal.HOLD)
+                conf = signal_data.get('confidence', 0.0)
+                print(f"  - {agent_name}: {sig.name} (confidence: {conf:.3f})")
+        
         # Rule 4: DRL-Based Decision or Weighted Voting Fallback
         print("\n[Step 4] Making Final Decision...")
         if self.use_drl:
@@ -208,7 +218,7 @@ class OrchestratorAgent(BaseAgent):
             final_signal = self._drl_decision(data, agent_signals, regime_result)
         else:
             print("  Using weighted voting...")
-            final_signal = self._weighted_voting(agent_signals, agent_weights)
+            final_signal = self._weighted_voting(agent_signals, agent_weights, regime_result=regime_result, market_data=data)
         
         print(f"  Final Signal: {final_signal['signal'].name}")
         print(f"  Confidence: {final_signal.get('confidence', 0):.3f}")
@@ -452,10 +462,22 @@ class OrchestratorAgent(BaseAgent):
         print(f"  Will Execute Trade: {'YES ✓' if will_trade else 'NO ✗'}")
         
         if not will_trade:
+            print(f"\n  [DIAGNOSTIC] Trade Rejection Analysis:")
             if final_signal['signal'] == Signal.HOLD:
-                print(f"    Reason: Signal is HOLD")
+                print(f"    ❌ Reason: Signal is HOLD")
+                print(f"       Possible causes:")
+                print(f"       - All agents returned HOLD")
+                print(f"       - Weighted voting resulted in HOLD (normalized_score near 0)")
+                print(f"       - SHORT trades disabled and signal was SELL")
+                print(f"       - Insufficient agent agreement (require_agent_agreement=True)")
             else:
-                print(f"    Reason: Confidence too low ({final_signal['confidence']:.3f} <= {self.min_confidence:.3f})")
+                print(f"    ❌ Reason: Confidence too low")
+                print(f"       Final confidence: {final_signal['confidence']:.3f}")
+                print(f"       Required minimum: {self.min_confidence:.3f}")
+                print(f"       Difference: {self.min_confidence - final_signal['confidence']:.3f}")
+                print(f"       Signal was: {final_signal['signal'].name} (not HOLD)")
+                if final_signal['confidence'] == 0.0:
+                    print(f"       ⚠️  Confidence is exactly 0.000 - check if agents are generating signals")
         
         if position_size_info:
             print(f"  Position Size: {position_size_info.get('quantity', 0):.4f} units")
@@ -695,11 +717,19 @@ class OrchestratorAgent(BaseAgent):
                     print(f"    {agent_name}: EXCLUDED (signal is HOLD with confidence={confidence:.3f})")
         
         if not filtered_signals:
+            print(f"  ❌ DIAGNOSTIC: All agent signals filtered out!")
+            print(f"     Total agents queried: {len(agent_signals)}")
+            print(f"     Valid signals after filtering: {len(filtered_signals)}")
+            print(f"     All agents either have confidence <= 0.05 or signal is HOLD")
+            if agent_signals:
+                print(f"     Agent details:")
+                for name, sig in agent_signals.items():
+                    print(f"       - {name}: {sig.get('signal', Signal.HOLD).name}, confidence={sig.get('confidence', 0):.3f}")
             return {
                 'signal': Signal.HOLD,
                 'confidence': 0.0,
                 'weighted_score': 0.0,
-                'reason': 'No valid agent signals (all have zero confidence)'
+                'reason': 'No valid agent signals (all filtered out)'
             }
         
         weighted_score = 0.0
