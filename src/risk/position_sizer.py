@@ -117,6 +117,17 @@ class PositionSizer:
         
         quantity = min(quantity, max_quantity)
         
+        # Ensure minimum position size (at least 0.5% of account balance to avoid tiny positions)
+        min_position_value = account_balance * 0.005  # 0.5% minimum
+        min_quantity = min_position_value / entry_price
+        
+        # Only enforce minimum if calculated quantity is meaningful (not zero or very small)
+        if quantity > 0 and quantity < min_quantity:
+            # Check if minimum would exceed max - if so, use calculated quantity
+            if min_quantity <= max_quantity:
+                quantity = min_quantity
+                print(f"PositionSizer: Enforcing minimum position size ({min_position_value:.2f} = 0.5% of balance)")
+        
         position_value = quantity * entry_price
         
         return {

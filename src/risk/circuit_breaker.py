@@ -560,6 +560,45 @@ class CircuitBreaker:
         self.peak_equity_time = datetime.now()
         print(f"Circuit Breaker: Peak equity reset to {current_equity:.2f}")
     
+    def check_and_reset_stale_state(self, current_equity: float, timestamp: Optional[datetime] = None):
+        """
+        Check for stale circuit breaker state and reset if needed
+        
+        This helps unblock trading when the circuit breaker is stuck due to stale data.
+        
+        Args:
+            current_equity: Current equity value
+            timestamp: Current timestamp (default: now)
+        
+        Returns:
+            True if state was reset, False otherwise
+        """
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        # If circuit breaker is triggered, check if it's stale
+        if self.triggered and self.triggered_at:
+            hours_since_trigger = (timestamp - self.triggered_at).total_seconds() / 3600
+            
+            # If triggered more than cooling period ago, reset it
+            if hours_since_trigger >= self.cooling_period_hours:
+                print(f"Circuit Breaker: Auto-resetting stale trigger (triggered {hours_since_trigger:.1f} hours ago)")
+                self.reset()
+                return True
+        
+        # Check for stale peak equity
+        if self.peak_equity and self.peak_equity_time:
+            days_since_peak = (timestamp - self.peak_equity_time).total_seconds() / 86400
+            current_drawdown = ((self.peak_equity - current_equity) / self.peak_equity) * 100 if self.peak_equity > 0 else 0.0
+            
+            # Reset if peak is more than 1 day old and causing false drawdown
+            if days_since_peak > 1.0 and current_drawdown > 0.5:
+                print(f"Circuit Breaker: Resetting stale peak equity (peak from {days_since_peak:.1f} days ago, drawdown: {current_drawdown:.2f}%)")
+                self.reset_peak_equity(current_equity)
+                return True
+        
+        return False
+    
     def reset(self):
         """Reset circuit breaker state (clears trigger and resets peak equity)"""
         self.triggered = False

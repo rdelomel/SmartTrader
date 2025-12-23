@@ -58,10 +58,12 @@ class OrchestratorAgent(BaseAgent):
         self.sentiment_analyzer = sentiment_analyzer  # For LLM conflict resolution
         
         # Decision tree thresholds (used as fallback)
-        self.min_confidence = self.config.get('min_confidence', 0.70)  # Raised from 0.40/0.50 to 0.70
-        self.consensus_threshold = self.config.get('consensus_threshold', 0.6)
+        # Lowered from 0.70 to 0.50 to allow more trades while maintaining quality
+        self.min_confidence = self.config.get('min_confidence', 0.50)  # Aligned with config default
+        self.consensus_threshold = self.config.get('consensus_threshold', 0.5)  # Lowered from 0.6
         self.veto_enabled = self.config.get('veto_enabled', True)
-        self.require_agent_agreement = self.config.get('require_agent_agreement', True)  # Require 2+ agents to agree
+        # Changed default to False to allow single strong signals (more trades)
+        self.require_agent_agreement = self.config.get('require_agent_agreement', False)  # Allow single strong signals
         self.disable_short_trades = self.config.get('disable_short_trades', True)  # Disable shorts (0% win rate)
         
         # DRL mode
@@ -373,6 +375,48 @@ class OrchestratorAgent(BaseAgent):
                         else:
                             take_profit = entry_price - reward
                         print(f"  ⚠️  EMERGENCY: Set fallback take profit: ${take_profit:.2f} (1:2 R/R)")
+                
+                # FINAL VALIDATION: Double-check SL/TP are correctly oriented (critical for preventing losses)
+                entry_price = data['close'].iloc[-1]
+                is_buy = final_signal['signal'] == Signal.BUY
+                
+                if stop_loss is not None:
+                    # Validate stop loss orientation one more time
+                    if is_buy and stop_loss >= entry_price:
+                        print(f"  ❌ FINAL VALIDATION FAILED: Stop loss ${stop_loss:.2f} >= Entry ${entry_price:.2f} for BUY")
+                        print(f"     Correcting stop loss to be below entry...")
+                        stop_loss = entry_price * 0.98  # 2% below entry
+                    elif not is_buy and stop_loss <= entry_price:
+                        print(f"  ❌ FINAL VALIDATION FAILED: Stop loss ${stop_loss:.2f} <= Entry ${entry_price:.2f} for SELL")
+                        print(f"     Correcting stop loss to be above entry...")
+                        stop_loss = entry_price * 1.02  # 2% above entry
+                
+                if take_profit is not None:
+                    # Validate take profit orientation one more time
+                    if is_buy and take_profit <= entry_price:
+                        print(f"  ❌ FINAL VALIDATION FAILED: Take profit ${take_profit:.2f} <= Entry ${entry_price:.2f} for BUY")
+                        print(f"     Correcting take profit to be above entry...")
+                        if stop_loss is not None:
+                            risk = abs(entry_price - stop_loss)
+                            take_profit = entry_price + (risk * 2.0)  # 1:2 R/R
+                        else:
+                            take_profit = entry_price * 1.02  # 2% above entry
+                    elif not is_buy and take_profit >= entry_price:
+                        print(f"  ❌ FINAL VALIDATION FAILED: Take profit ${take_profit:.2f} >= Entry ${entry_price:.2f} for SELL")
+                        print(f"     Correcting take profit to be below entry...")
+                        if stop_loss is not None:
+                            risk = abs(entry_price - stop_loss)
+                            take_profit = entry_price - (risk * 2.0)  # 1:2 R/R
+                        else:
+                            take_profit = entry_price * 0.98  # 2% below entry
+                
+                # Log final validated values
+                if stop_loss is not None and take_profit is not None:
+                    risk = abs(entry_price - stop_loss)
+                    reward = abs(take_profit - entry_price)
+                    if risk > 0:
+                        actual_rr = reward / risk
+                        print(f"  ✅ FINAL VALIDATED: Entry=${entry_price:.2f}, SL=${stop_loss:.2f}, TP=${take_profit:.2f}, R/R=1:{actual_rr:.2f}")
                 
             except Exception as e:
                 # If calculation fails, use emergency fallbacks
@@ -686,14 +730,14 @@ class OrchestratorAgent(BaseAgent):
             }
         
         # Base weights (normalized to sum to 1.0)
-        # CRITICAL: Adjusted to reduce sentiment dominance and increase technical importance
-        # Technical increased from 0.30 to 0.80, Sentiment reduced from 1.2 (after multiplier) to 0.60
+        # Rebalanced to improve signal quality: prioritize technical and quantitative analysis
+        # Reduced sentiment weight further to prevent bad trades from sentiment-driven signals
         base_weights = {
-            'technical': self.config.get('technical_weight', 0.80),  # Increased from 0.30
-            'sentiment': self.config.get('sentiment_weight', 0.60),  # Reduced from 1.2 (effective weight)
-            'fundamental': self.config.get('fundamental_weight', 0.20),
-            'quantitative': self.config.get('quantitative_weight', 0.15),
-            'pattern_forecaster': self.config.get('pattern_forecaster_weight', 0.25)
+            'technical': self.config.get('technical_weight', 0.50),  # Primary signal source
+            'sentiment': self.config.get('sentiment_weight', 0.15),  # Reduced significantly - was causing bad trades
+            'fundamental': self.config.get('fundamental_weight', 0.10),  # Reduced - less reliable
+            'quantitative': self.config.get('quantitative_weight', 0.20),  # Increased - statistical models more reliable
+            'pattern_forecaster': self.config.get('pattern_forecaster_weight', 0.15)  # Historical patterns
         }
         
         # Normalize weights to sum to 1.0

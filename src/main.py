@@ -820,6 +820,37 @@ class TradingAgent:
         while self.running:
             try:
                 # Check kill switch - check all brokers (any broker can trigger kill switch)
+                # First, check and reset stale states to unblock trading if needed
+                for broker_name, dd_manager in self.drawdown_managers.items():
+                    try:
+                        # Get current equity for this broker
+                        broker = self.brokers.get(broker_name)
+                        if broker:
+                            try:
+                                balance_info = broker.get_account_balance()
+                                current_equity = balance_info.get('total', 0.0)
+                                if current_equity > 0:
+                                    dd_manager.check_and_reset_stale_state(current_equity)
+                            except:
+                                pass  # If we can't get balance, skip reset check
+                    except:
+                        pass  # Continue if reset check fails
+                
+                # Also check main drawdown manager
+                try:
+                    # Get aggregated balance
+                    total_balance = 0.0
+                    for broker_name, b in self.brokers.items():
+                        try:
+                            balance_info = b.get_account_balance()
+                            total_balance += balance_info.get('total', 0.0)
+                        except:
+                            pass
+                    if total_balance > 0:
+                        self.drawdown_manager.check_and_reset_stale_state(total_balance)
+                except:
+                    pass
+                
                 kill_switch_active = False
                 kill_switch_brokers = []
                 for broker_name, dd_manager in self.drawdown_managers.items():
@@ -1092,16 +1123,64 @@ class TradingAgent:
                 else:
                     reason = 'Unknown reason'
                 
+                # Enhanced logging with signal quality metrics
+                agent_signals_summary = {}
+                for agent_name, agent_data in agent_signals.items():
+                    agent_signals_summary[agent_name] = {
+                        'signal': agent_data.get('signal', 'HOLD').name if hasattr(agent_data.get('signal'), 'name') else str(agent_data.get('signal', 'HOLD')),
+                        'confidence': agent_data.get('confidence', 0.0)
+                    }
+                
                 print(f"  ❌ Trade NOT executed: {reason}")
+                print(f"  📊 Signal Quality Metrics:")
+                print(f"     Final Signal: {signal_value.name if hasattr(signal_value, 'name') else signal_value}")
+                print(f"     Final Confidence: {confidence:.3f} (required: {min_conf:.3f})")
+                print(f"     Weighted Score: {decision.get('weighted_score', 0):.3f}")
+                print(f"     Consensus: {decision.get('consensus', {}).get('has_consensus', False)}")
+                print(f"     Agent Signals: {agent_signals_summary}")
+                
                 self.logger.log_decision({
                     'symbol': symbol,
                     'reason': reason,
                     'confidence': confidence,
                     'min_confidence': min_conf,
-                    'signal': signal_value.name if hasattr(signal_value, 'name') else str(signal_value)
+                    'signal': signal_value.name if hasattr(signal_value, 'name') else str(signal_value),
+                    'weighted_score': decision.get('weighted_score', 0),
+                    'consensus': decision.get('consensus', {}),
+                    'agent_signals': agent_signals_summary,
+                    'regime': decision.get('regime', 'Unknown'),
+                    'regime_confidence': decision.get('regime_confidence', 0)
                 }, event='trade_skipped')
             else:
+                # Enhanced logging for executed trades
                 print(f"  ✅ Trade WILL be executed - calling _execute_trade()...")
+                print(f"  📊 Execution Metrics:")
+                print(f"     Signal: {signal_value.name if hasattr(signal_value, 'name') else signal_value}")
+                print(f"     Confidence: {confidence:.3f}")
+                print(f"     Weighted Score: {decision.get('weighted_score', 0):.3f}")
+                print(f"     Entry Price: ${decision.get('entry_price', 0):.2f}")
+                print(f"     Stop Loss: ${decision.get('stop_loss', 0):.2f}" if decision.get('stop_loss') else "     Stop Loss: None")
+                print(f"     Take Profit: ${decision.get('take_profit', 0):.2f}" if decision.get('take_profit') else "     Take Profit: None")
+                if decision.get('stop_loss') and decision.get('entry_price'):
+                    risk = abs(decision.get('entry_price', 0) - decision.get('stop_loss', 0))
+                    reward = abs(decision.get('take_profit', 0) - decision.get('entry_price', 0)) if decision.get('take_profit') else 0
+                    if risk > 0:
+                        rr_ratio = reward / risk if reward > 0 else 0
+                        print(f"     Risk/Reward: 1:{rr_ratio:.2f}")
+                
+                # Log execution decision
+                self.logger.log_decision({
+                    'symbol': symbol,
+                    'signal': signal_value.name if hasattr(signal_value, 'name') else str(signal_value),
+                    'confidence': confidence,
+                    'weighted_score': decision.get('weighted_score', 0),
+                    'entry_price': decision.get('entry_price'),
+                    'stop_loss': decision.get('stop_loss'),
+                    'take_profit': decision.get('take_profit'),
+                    'regime': decision.get('regime', 'Unknown'),
+                    'consensus': decision.get('consensus', {})
+                }, event='trade_executed')
+                
                 self._execute_trade(symbol, decision, df, broker)
             
         except Exception as e:
@@ -1251,12 +1330,16 @@ class TradingAgent:
             # Also update per-broker circuit breakers
             for broker_name, cb in self.circuit_breakers.items():
                 if cb:
-                    cb.update_equity(account_balance)
+                    # Check and reset stale state before updating
+                    broker_balance = broker_balance_info.get(broker_name, {}).get('total', account_balance)
+                    cb.check_and_reset_stale_state(broker_balance, datetime.now())
+                    
+                    cb.update_equity(broker_balance)
                     # Initialize peak equity if not set
                     if cb.peak_equity is None:
-                        cb.reset_peak_equity(account_balance)
-                    elif cb.peak_equity > 0 and abs(cb.peak_equity - account_balance) / cb.peak_equity > 0.5:
-                        cb.reset_peak_equity(account_balance)
+                        cb.reset_peak_equity(broker_balance)
+                    elif cb.peak_equity > 0 and abs(cb.peak_equity - broker_balance) / cb.peak_equity > 0.5:
+                        cb.reset_peak_equity(broker_balance)
             
             # Use position size from orchestrator (already calculated with regime adjustments)
             position_info = decision.get('position_size', {})

@@ -133,6 +133,50 @@ class DrawdownManager:
         if self.current_equity:
             self.peak_equity = self.current_equity
     
+    def check_and_reset_stale_state(self, current_equity: Optional[float] = None):
+        """
+        Check for stale kill switch state and reset if needed
+        
+        This helps unblock trading when the kill switch is stuck due to stale data.
+        
+        Args:
+            current_equity: Current equity value (if None, uses self.current_equity)
+        
+        Returns:
+            True if state was reset, False otherwise
+        """
+        if current_equity is None:
+            current_equity = self.current_equity
+        
+        if current_equity is None:
+            return False
+        
+        # If kill switch is active, check if it's stale
+        if self.kill_switch_active:
+            drawdown = self.calculate_drawdown()
+            
+            # If drawdown is below threshold, reset kill switch
+            if drawdown < self.max_drawdown_percent * 0.8:  # Reset when drawdown drops below 80% of limit
+                print(f"DrawdownManager: Auto-resetting kill switch (drawdown {drawdown:.2f}% < {self.max_drawdown_percent * 0.8:.2f}%)")
+                self.reset_kill_switch()
+                return True
+            
+            # If peak equity is stale (more than 1 day old), reset it
+            if self.peak_equity and len(self.equity_history) > 0:
+                peak_entry = next((e for e in reversed(self.equity_history) if e['equity'] == self.peak_equity), None)
+                if peak_entry:
+                    days_since_peak = (datetime.now() - peak_entry['timestamp']).total_seconds() / 86400
+                    if days_since_peak > 1.0:
+                        print(f"DrawdownManager: Resetting stale peak equity (peak from {days_since_peak:.1f} days ago)")
+                        self.peak_equity = current_equity
+                        # Recalculate drawdown - if it's now below threshold, reset kill switch
+                        drawdown = self.calculate_drawdown()
+                        if drawdown < self.max_drawdown_percent:
+                            self.reset_kill_switch()
+                            return True
+        
+        return False
+    
     def get_status(self) -> Dict:
         """
         Get current drawdown status
