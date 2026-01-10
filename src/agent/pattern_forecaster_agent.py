@@ -93,22 +93,54 @@ class PatternForecasterAgent(BaseAgent):
                 print(f"  Limiting historical data from {len(historical_data)} to {max_historical_bars} bars")
                 historical_data = historical_data.iloc[-max_historical_bars:]
             
-            # Forecast using pattern matching with error handling
+            # Forecast using pattern matching with timeout handling
+            import signal
+            import sys
+            
+            timeout_seconds = self.config.get('analysis_timeout_seconds', 20)  # Reduced from 30 to 20 seconds
+            forecast = None
+            timeout_occurred = False
+            
+            def timeout_handler(signum, frame):
+                nonlocal timeout_occurred
+                timeout_occurred = True
+                raise TimeoutError(f"Pattern forecasting exceeded {timeout_seconds}s timeout")
+            
             try:
-                forecast = self.forecaster.forecast(
-                    current_data=data,
-                    historical_data=historical_data,
-                    min_matches=self.min_matches
-                )
-            except Exception as e:
-                print(f"  Error in pattern forecasting: {e}")
-                return {
-                    'signal': Signal.HOLD,
-                    'score': 0.0,
-                    'confidence': 0.0,
-                    'source': self.name,
-                    'reason': f'Pattern matching error: {str(e)}'
-                }
+                # Set timeout signal (Unix only - Windows will use try/except)
+                if sys.platform != 'win32':
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(timeout_seconds)
+                
+                try:
+                    forecast = self.forecaster.forecast(
+                        current_data=data,
+                        historical_data=historical_data,
+                        min_matches=self.min_matches
+                    )
+                finally:
+                    if sys.platform != 'win32':
+                        signal.alarm(0)  # Cancel timeout
+            except (TimeoutError, Exception) as e:
+                if timeout_occurred or 'timeout' in str(e).lower():
+                    print(f"  ⚠️  Pattern forecasting timeout after {timeout_seconds}s - returning HOLD (non-blocking)")
+                    # Don't block trading on timeout - just return HOLD
+                    return {
+                        'signal': Signal.HOLD,
+                        'score': 0.0,
+                        'confidence': 0.0,
+                        'source': self.name,
+                        'reason': f'Pattern forecasting timeout ({timeout_seconds}s) - proceeding without pattern signal'
+                    }
+                else:
+                    print(f"  Error in pattern forecasting: {e}")
+                    return {
+                        'signal': Signal.HOLD,
+                        'score': 0.0,
+                        'confidence': 0.0,
+                        'source': self.name,
+                        'reason': f'Pattern matching error: {str(e)}'
+                    }
             
             if forecast.get('signal') is None:
                 print(f"  No forecast generated: {forecast.get('reason', 'Unknown')}")

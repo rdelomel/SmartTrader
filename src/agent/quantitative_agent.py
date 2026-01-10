@@ -137,10 +137,10 @@ class QuantitativeAgent(BaseAgent):
         weighted_score = np.average(signal_values, weights=confidences)
         avg_confidence = np.mean(confidences)
         
-        # Determine final signal
-        if weighted_score > 0.2:
+        # Determine final signal (lowered threshold to allow more quantitative signals)
+        if weighted_score > 0.1:  # Lowered from 0.2 to 0.1 - allow weaker signals
             final_signal = Signal.BUY
-        elif weighted_score < -0.2:
+        elif weighted_score < -0.1:  # Lowered from -0.2 to -0.1 - allow weaker signals
             final_signal = Signal.SELL
         else:
             final_signal = Signal.HOLD

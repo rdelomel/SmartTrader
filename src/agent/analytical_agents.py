@@ -275,10 +275,10 @@ class TechnicalAnalystAgent(BaseAgent):
         weighted_score /= total_weight
         weighted_confidence /= total_weight
         
-        # Determine final signal (lowered threshold)
-        if weighted_score > 0.2:  # Lowered from 0.3
+        # Determine final signal (further lowered threshold to allow more trades)
+        if weighted_score > 0.1:  # Lowered from 0.2 to 0.1 - allow weaker trends
             final_signal = Signal.BUY
-        elif weighted_score < -0.2:  # Lowered from -0.3
+        elif weighted_score < -0.1:  # Lowered from -0.2 to -0.1 - allow weaker trends
             final_signal = Signal.SELL
         else:
             final_signal = Signal.HOLD

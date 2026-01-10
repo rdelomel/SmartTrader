@@ -994,18 +994,43 @@ class TradingAgent:
             # Add indicators
             df = self.indicators.add_all_indicators(df)
             
-            # Check for anomalies
+            # Check for anomalies - but don't block on isolated anomalies, only severe ones
             if self.anomaly_detector.is_trained:
-                anomalies = self.anomaly_detector.detect(df)
-                if anomalies.iloc[-1] if not anomalies.empty else False:
-                    self.logger.log_risk_event({
-                        'event': 'anomaly_detected',
-                        'symbol': symbol
-                    })
-                    return  # Skip trading on anomalies
+                try:
+                    anomalies = self.anomaly_detector.detect(df)
+                    if not anomalies.empty and len(anomalies) > 0:
+                        # Only skip if LAST 3 bars are all anomalies (severe condition)
+                        # Don't block on single anomaly - markets have normal volatility
+                        recent_anomalies = anomalies.tail(3)
+                        if recent_anomalies.all():  # All last 3 bars are anomalies
+                            self.logger.log_risk_event({
+                                'event': 'severe_anomaly_detected',
+                                'symbol': symbol,
+                                'anomaly_count': recent_anomalies.sum()
+                            })
+                            print(f"  ⚠️  Skipping {symbol} - Severe anomaly detected (last 3 bars)")
+                            return
+                        elif anomalies.iloc[-1]:  # Just current bar is anomaly
+                            # Don't block - just log and reduce position size if needed
+                            print(f"  ⚠️  Minor anomaly detected for {symbol} - proceeding with caution")
+                            self.logger.log_risk_event({
+                                'event': 'minor_anomaly_detected',
+                                'symbol': symbol
+                            })
+                except Exception as e:
+                    # If anomaly detection fails, don't block trading
+                    print(f"  ⚠️  Anomaly detection error (non-critical): {e}")
+                    # Continue with trading - anomaly detection is optional safety feature
             
-            # Fetch news for sentiment analysis
-            news_items = self.news_fetcher.fetch_news_for_symbol(symbol) if self.news_fetcher else None
+            # Fetch news for sentiment analysis (non-blocking - failures don't prevent trading)
+            try:
+                news_items = self.news_fetcher.fetch_news_for_symbol(symbol) if self.news_fetcher else None
+                if not news_items:
+                    news_items = []  # Ensure it's a list, not None
+                    print(f"  ⚠️  No news items fetched for {symbol} - proceeding without sentiment")
+            except Exception as e:
+                print(f"  ⚠️  News fetching error (non-critical): {e} - proceeding without sentiment")
+                news_items = []  # Don't block trading on news fetch failures
             
             # Get account balance for risk management - use broker-specific balance for this trade
             # Determine which broker will handle this symbol
@@ -1388,9 +1413,10 @@ class TradingAgent:
             print(f"    Take Profit: ${take_profit:.2f}" if take_profit is not None else "    Take Profit: None")
             
             # CRITICAL: Check position correlation BEFORE portfolio exposure check
-            # Prevent over-concentration in correlated assets (e.g., multiple crypto or forex pairs)
-            max_correlated_positions = self.config.get('max_correlated_positions', 3)  # Default: 3 for same asset class
-            max_correlated_pairs = self.config.get('max_correlated_pairs', 2)  # Default: 2 for correlated pairs
+            # Relaxed limits to allow more trading opportunities (was blocking trades)
+            portfolio_risk_config = self.config.get('portfolio_risk', {})
+            max_correlated_positions = portfolio_risk_config.get('max_correlated_positions', 5)  # Read from config, default 5
+            max_correlated_pairs = portfolio_risk_config.get('max_correlated_pairs', 3)  # Read from config, default 3
             
             # Define correlated forex pairs
             correlated_forex_groups = [

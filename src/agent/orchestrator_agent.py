@@ -200,6 +200,8 @@ class OrchestratorAgent(BaseAgent):
                     print(f"    Matches Found: {pattern_result['matches_found']}, Forecast: {pattern_result.get('forecast_change_pct', 0):.2f}%")
             except Exception as e:
                 print(f"  Pattern Forecaster Error: {e}")
+                # Don't block trading on pattern forecaster errors - it's optional analysis
+                # Continue with other agents' signals
         else:
             print("  Pattern Forecaster Agent: DISABLED")
         
@@ -750,13 +752,14 @@ class OrchestratorAgent(BaseAgent):
         filtered_signals = {}
         for agent_name, signal in agent_signals.items():
             confidence = signal.get('confidence', 0.0)
-            # Only include if confidence > 0.05 (5% minimum) AND signal is not HOLD
-            # This ensures only agents with meaningful confidence AND non-HOLD signals are included
-            if confidence > 0.05 and signal['signal'] != Signal.HOLD:
+            # Relaxed filtering: Only exclude HOLD signals with zero confidence
+            # Reduced minimum confidence from 0.05 to 0.01 to allow more signals through
+            # Even weak signals can be valuable when aggregated with others
+            if signal['signal'] != Signal.HOLD and confidence > 0.01:
                 filtered_signals[agent_name] = signal
             else:
-                if confidence <= 0.05:
-                    print(f"    {agent_name}: EXCLUDED (confidence={confidence:.3f} too low)")
+                if confidence <= 0.01:
+                    print(f"    {agent_name}: EXCLUDED (confidence={confidence:.3f} too low or zero)")
                 elif signal['signal'] == Signal.HOLD:
                     print(f"    {agent_name}: EXCLUDED (signal is HOLD with confidence={confidence:.3f})")
         
