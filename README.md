@@ -45,9 +45,14 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. Install dependencies:
+3. Install base dependencies (recommended for deployment/CI):
 ```bash
 pip install -r requirements.txt
+```
+
+   Optional: install heavyweight AI/RL extras (TensorFlow + stable-baselines3) only when needed:
+```bash
+pip install -r requirements.txt -r requirements-optional-ai.txt
 ```
 
 4. Set up environment variables:
