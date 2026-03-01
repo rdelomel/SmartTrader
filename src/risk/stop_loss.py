@@ -44,9 +44,13 @@ class StopLossManager:
         Returns:
             Stop loss price
         """
-        # Calculate ATR
+        # Calculate ATR (with robust fallback when ATR is NaN due to short history)
         atr = self.indicators.atr(data)
-        atr_value = atr.iloc[-1] if not atr.empty else entry_price * 0.02
+        atr_value = atr.iloc[-1] if not atr.empty else np.nan
+
+        # ATR may be NaN when there are not enough bars; fall back to 2% of price
+        if pd.isna(atr_value) or atr_value <= 0:
+            atr_value = entry_price * 0.02
         
         # Calculate stop loss distance
         stop_distance = atr_value * self.stop_loss_atr_multiplier
@@ -83,9 +87,12 @@ class StopLossManager:
         if not self.trailing_stop_enabled:
             return current_stop_loss
         
-        # Calculate ATR
+        # Calculate ATR (with robust fallback when ATR is NaN due to short history)
         atr = self.indicators.atr(data)
-        atr_value = atr.iloc[-1] if not atr.empty else current_price * 0.02
+        atr_value = atr.iloc[-1] if not atr.empty else np.nan
+
+        if pd.isna(atr_value) or atr_value <= 0:
+            atr_value = current_price * 0.02
         
         # Calculate trailing stop distance
         trailing_distance = atr_value * self.trailing_stop_atr_multiplier
@@ -191,4 +198,3 @@ class StopLossManager:
             take_profit = entry_price - reward
         
         return take_profit
-
