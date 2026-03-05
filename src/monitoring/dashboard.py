@@ -318,90 +318,94 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     
     @app.get("/api/dashboard")
     async def get_dashboard_api():
-        """Get dashboard data as JSON - with fallback to load from database if empty"""
-        # If dashboard data is still default/empty, try to load from database
-        if (dashboard_data.get('equity', 0) == 10000.0 and 
-            dashboard_data.get('balance', 0) == 10000.0 and 
-            len(dashboard_data.get('positions', [])) == 0 and
-            len(dashboard_data.get('trades', [])) == 0 and
-            app.storage):
-            # Try to load data from database
-            try:
-                # Get open trades
-                open_trades = app.storage.get_open_trades()
-                positions = []
-                for trade in open_trades:
-                    positions.append({
-                        'symbol': trade.get('symbol'),
-                        'side': trade.get('side', 'buy'),
-                        'quantity': trade.get('quantity', 0),
-                        'entry_price': trade.get('entry_price', 0),
-                        'current_price': trade.get('entry_price', 0),  # Fallback
-                        'pnl': trade.get('pnl', 0),
-                        'trade_id': trade.get('trade_id')
-                    })
-                
-                # Get recent closed trades
-                all_trades = app.storage.get_all_trades(limit=50) if hasattr(app.storage, 'get_all_trades') else []
-                closed_trades = [t for t in all_trades if t.get('status') == 'closed']
-                
-                # Calculate totals
-                total_balance = 0.0
-                if app.brokers:
-                    for broker in app.brokers.values():
-                        try:
-                            balance_info = broker.get_account_balance()
-                            total_balance += balance_info.get('total', 0.0)
-                        except:
-                            pass
-                
-                # Calculate realized P&L from closed trades
-                realized_pnl = sum(t.get('pnl', 0) for t in closed_trades)
-                
-                # Get initial equity (try to get from reporter, or use balance as fallback)
-                initial_equity = 10000.0  # Default
-                if reporter and hasattr(reporter, 'initial_equity'):
-                    initial_equity = reporter.initial_equity
-                if not initial_equity or initial_equity == 0:
-                    initial_equity = total_balance if total_balance > 0 else 10000.0
-                
-                # Calculate equity (balance + unrealized P&L)
-                unrealized_pnl = sum(p.get('pnl', 0) for p in positions)
-                equity = total_balance + unrealized_pnl
-                
-                # Calculate total return
-                total_return = ((equity - initial_equity) / initial_equity * 100) if initial_equity > 0 else 0.0
-                
-                # Calculate win/loss rates
-                winning_trades = [t for t in closed_trades if t.get('pnl', 0) > 0]
-                losing_trades = [t for t in closed_trades if t.get('pnl', 0) < 0]
-                win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0.0
-                loss_rate = (len(losing_trades) / len(closed_trades) * 100) if closed_trades else 0.0
-                
-                # Update dashboard data with loaded information
-                dashboard_data.update({
-                    'equity': equity,
-                    'balance': total_balance,
-                    'positions': positions,
-                    'trades': closed_trades[-10:],  # Last 10 closed trades
-                    'performance': {
-                        'total_return': total_return,
-                        'realized_pnl': realized_pnl,
-                        'unrealized_pnl': unrealized_pnl,
-                        'total_trades': len(closed_trades),
-                        'win_rate': win_rate,
-                        'loss_rate': loss_rate,
-                        'sharpe_ratio': 0.0,
-                        'initial_equity': initial_equity
-                    }
-                })
-            except Exception as e:
-                print(f"Error loading dashboard data from database: {e}")
-                import traceback
-                traceback.print_exc()
-        
+        """Get dashboard data as JSON populated from storage/brokers when available."""
+
+        def _normalize_trade(trade: Dict) -> Dict:
+            """Normalize trade shape for dashboard UI rendering."""
+            quantity = trade.get('quantity') or trade.get('filled_qty') or 0.0
+            entry_price = trade.get('entry_price') or trade.get('price') or 0.0
+            exit_price = trade.get('exit_price') or trade.get('price') or entry_price
+            status = (trade.get('status') or '').lower()
+            # Closed trades should display exit price, open trades entry/current as fallback.
+            display_price = exit_price if status == 'closed' else entry_price
+            return {
+                'trade_id': trade.get('trade_id') or trade.get('order_id') or '',
+                'symbol': trade.get('symbol', ''),
+                'side': trade.get('side', ''),
+                'quantity': float(quantity or 0.0),
+                'price': float(display_price or 0.0),
+                'pnl': float(trade.get('pnl', 0.0) or 0.0),
+                'time': trade.get('exit_time') or trade.get('entry_time') or datetime.now().isoformat(),
+                'status': status
+            }
+
+        try:
+            positions = dashboard_data.get('positions', [])
+            all_trades = app.storage.get_all_trades(limit=500) if (app.storage and hasattr(app.storage, 'get_all_trades')) else []
+            closed_trades = [t for t in all_trades if t.get('status') == 'closed']
+
+            # Refresh balance from brokers if possible; otherwise keep current dashboard balance.
+            total_balance = 0.0
+            if app.brokers:
+                for broker in app.brokers.values():
+                    try:
+                        balance_info = broker.get_account_balance()
+                        total_balance += float(balance_info.get('total', 0.0) or 0.0)
+                    except Exception:
+                        pass
+            if total_balance <= 0:
+                total_balance = float(dashboard_data.get('balance', 0.0) or 0.0)
+
+            # Reporter-backed metrics (single source of truth for dashboard/report parity)
+            report_data = reporter.generate_report() if reporter else None
+            general = report_data.get('general', {}) if report_data else {}
+            advanced = report_data.get('advanced', {}) if report_data else {}
+            equity_curve = report_data.get('equity_curve', []) if report_data else []
+
+            realized_pnl = float(general.get('net_profit', sum((t.get('pnl', 0) or 0) for t in closed_trades)) or 0.0)
+            unrealized_pnl = float(sum((p.get('pnl', 0) or 0) for p in positions) or 0.0)
+            equity = total_balance + unrealized_pnl
+            initial_eq = float((reporter.initial_equity if reporter else 10000.0) or 10000.0)
+            total_return = ((equity - initial_eq) / initial_eq * 100) if initial_eq > 0 else 0.0
+
+            peak_equity = max([point.get('equity', 0.0) for point in equity_curve], default=initial_eq)
+            current_drawdown = 0.0
+            if peak_equity > 0:
+                current_drawdown = max(0.0, min(100.0, ((peak_equity - equity) / peak_equity * 100)))
+
+            normalized_recent_trades = [_normalize_trade(t) for t in sorted(
+                all_trades,
+                key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+                reverse=True
+            )[:30]]
+
+            dashboard_data.update({
+                'equity': float(equity),
+                'balance': float(total_balance),
+                'positions': positions,
+                'trades': normalized_recent_trades,
+                'performance': {
+                    'total_return': float(total_return),
+                    'realized_pnl': float(realized_pnl),
+                    'unrealized_pnl': float(unrealized_pnl),
+                    'total_trades': int(general.get('total_trades', len(closed_trades)) or 0),
+                    'win_rate': float(general.get('win_rate', 0.0) or 0.0),
+                    'loss_rate': float(general.get('loss_rate', 0.0) or 0.0),
+                    'sharpe_ratio': float(advanced.get('sharpe_ratio', 0.0) or 0.0),
+                    'initial_equity': float(initial_eq)
+                },
+                'risk_metrics': {
+                    'drawdown_percent': float(current_drawdown),
+                    'peak_equity': float(peak_equity),
+                    'current_equity': float(equity),
+                    'max_drawdown_percent': float(advanced.get('max_drawdown', 0.0) or 0.0)
+                }
+            })
+        except Exception as e:
+            print(f"Error loading dashboard data from database: {e}")
+
         return _serialize_datetime(dashboard_data)
-    
+
     @app.post("/api/close_position/{trade_id}")
     async def close_position(trade_id: str):
         """
