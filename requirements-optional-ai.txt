@@ -1,0 +1,10 @@
+# Optional heavy AI/RL dependencies.
+# Install only when you need LSTM or stable-baselines3 based DRL training:
+#   pip install --no-cache-dir -r requirements.txt -r requirements-optional-ai.txt
+
+tensorflow>=2.13.0
+stable-baselines3>=2.0.0
+gymnasium>=0.29.0
+
+# If your environment requires an explicit CPU torch wheel,
+# install torch separately from https://pytorch.org/get-started/locally/

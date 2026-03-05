@@ -471,7 +471,7 @@ class OrchestratorAgent(BaseAgent):
         print(f"  Min Confidence Required: {self.min_confidence:.3f}")
         
         will_trade = (final_signal['signal'] != Signal.HOLD and 
-                     final_signal['confidence'] > self.min_confidence)
+                     final_signal['confidence'] >= self.min_confidence)
         
         # CRITICAL: Check minimum technical confidence if trading primarily on sentiment
         # Don't trade on sentiment alone when technical is weak

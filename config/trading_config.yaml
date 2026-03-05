@@ -64,12 +64,14 @@ agents:
   
   orchestrator:
     enabled: true
-    min_confidence: 0.35  # Lowered from 0.50 to 0.35 - allow more trades through
+    min_confidence: 0.30  # Lowered to increase trade frequency while keeping quality filters
     consensus_threshold: 0.4  # Lowered from 0.5 to 0.4 - less strict consensus
     require_agent_agreement: false  # Keep false - allow single strong signals
     veto_enabled: true
     aggressive_mode: false  # Keep disabled for now
     risk_reward_ratio: 2.0  # Keep at 2.0 (1:2) - reasonable R/R
+    disable_short_trades: false  # Enable shorting to avoid one-sided bias in bearish regimes
+    min_technical_confidence_for_sentiment_trade: 0.25  # Allow sentiment trades when technical is not weak/conflicting
     # Common ratios: 1:2 (minimum), 1:3 (sweet spot), 1:5+ (requires precise entries)
     # Must match win rate: 50% win rate needs 1:2+, 40% needs 1:3+, 60% can work with 1:1.5
     # Agent weights for weighted voting (normalized automatically)
