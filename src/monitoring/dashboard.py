@@ -45,6 +45,34 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     
     # Initialize reporter
     reporter = TradingReporter(storage) if storage else None
+
+    def _normalize_symbol(symbol: Optional[str]) -> str:
+        if not symbol:
+            return ''
+        return str(symbol).replace('_', '/').replace('-', '/').upper()
+
+    def _symbols_match(a: Optional[str], b: Optional[str]) -> bool:
+        na = _normalize_symbol(a).replace('/', '')
+        nb = _normalize_symbol(b).replace('/', '')
+        return bool(na and nb and na == nb)
+
+    def _collect_broker_open_positions() -> List[Dict]:
+        positions: List[Dict] = []
+        if not app.brokers:
+            return positions
+        for broker_name, broker in app.brokers.items():
+            try:
+                for pos in broker.get_open_positions() or []:
+                    positions.append({
+                        'broker': broker_name,
+                        'symbol': _normalize_symbol(pos.get('symbol', '')),
+                        'side': str(pos.get('side', 'buy')).lower(),
+                        'raw': pos
+                    })
+            except Exception as e:
+                print(f"Error collecting positions from broker {broker_name}: {e}")
+        return positions
+
     
     @app.get("/")
     async def get_dashboard():
@@ -280,7 +308,7 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                             <td>$${pos.current_price || pos.entry_price}</td>
                             <td class="${pos.pnl >= 0 ? 'positive' : 'negative'}">$${pos.pnl.toFixed(2)}</td>
                             <td>
-                                <button class="btn-close" onclick="closePosition('${pos.trade_id}', '${pos.symbol}', '${pos.side}')" title="${buttonTitle}">
+                                <button class="btn-close" onclick="closePosition('${pos.trade_id || pos.symbol.replace('/', '_')}', '${pos.symbol}', '${pos.side}')" title="${buttonTitle}">
                                     ${buttonText}
                                 </button>
                             </td>
@@ -406,80 +434,137 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
 
         return _serialize_datetime(dashboard_data)
 
+    @app.get("/api/reconcile_open_trades")
+    async def reconcile_open_trades():
+        """Reconcile local open trades with broker open positions."""
+        if not app.storage:
+            return {
+                'success': False,
+                'error': 'Storage not available',
+                'stale_local_trades': [],
+                'broker_only_positions': []
+            }
+
+        local_open = app.storage.get_open_trades() if hasattr(app.storage, 'get_open_trades') else []
+        broker_open = _collect_broker_open_positions()
+
+        stale_local = []
+        for t in local_open:
+            t_symbol = _normalize_symbol(t.get('symbol'))
+            t_side = str(t.get('side', 'buy')).lower()
+            exists = any(_symbols_match(t_symbol, p.get('symbol')) and t_side == p.get('side') for p in broker_open)
+            if not exists:
+                stale_local.append({
+                    'trade_id': t.get('trade_id'),
+                    'symbol': t.get('symbol'),
+                    'side': t.get('side')
+                })
+
+        broker_only = []
+        for p in broker_open:
+            exists = any(
+                _symbols_match(t.get('symbol'), p.get('symbol')) and str(t.get('side', 'buy')).lower() == p.get('side')
+                for t in local_open
+            )
+            if not exists:
+                broker_only.append({
+                    'broker': p.get('broker'),
+                    'symbol': p.get('symbol'),
+                    'side': p.get('side')
+                })
+
+        return {
+            'success': True,
+            'local_open_count': len(local_open),
+            'broker_open_count': len(broker_open),
+            'stale_local_trades': stale_local,
+            'broker_only_positions': broker_only
+        }
+
     @app.post("/api/close_position/{trade_id}")
     async def close_position(trade_id: str):
         """
-        Close/delete a position by trade_id
+        Close/delete a position by trade identifier.
         - If position exists in broker (Alpaca/OANDA), close it via API
         - If position is phantom (local only), delete from database
+        - If trade_id is missing, supports symbol-based fallback
         """
         if not app.storage:
             return {"success": False, "error": "Storage not available"}
-        
+
         try:
-            # Get the trade to check if it exists
-            open_trades = app.storage.get_open_trades()
-            trade = next((t for t in open_trades if t.get('trade_id') == trade_id), None)
+            open_trades = app.storage.get_open_trades() if hasattr(app.storage, 'get_open_trades') else []
+            all_trades = app.storage.get_all_trades(limit=500) if hasattr(app.storage, 'get_all_trades') else []
 
-            # Fallback: also search all trades (some synced trades may not be marked open)
+            trade = None
+            normalized_input = _normalize_symbol(trade_id)
+
+            # 1) Primary lookup by trade/order id
+            if trade_id:
+                trade = next((t for t in open_trades if str(t.get('trade_id', '')) == str(trade_id)), None)
+                if not trade:
+                    trade = next(
+                        (t for t in all_trades if str(t.get('trade_id', '')) == str(trade_id) or str(t.get('order_id', '')) == str(trade_id)),
+                        None,
+                    )
+
+            # 2) Fallback lookup by symbol when UI had no trade_id
+            if not trade and normalized_input:
+                symbol_matches = [
+                    t for t in open_trades
+                    if _symbols_match(t.get('symbol'), normalized_input)
+                ]
+                if symbol_matches:
+                    trade = symbol_matches[0]
+
+            # 3) If still missing, attempt reconciliation and close directly from broker positions by symbol
             if not trade:
-                all_trades = app.storage.get_all_trades(limit=500) if hasattr(app.storage, "get_all_trades") else []
-                trade = next(
-                    (
-                        t
-                        for t in all_trades
-                        if t.get("trade_id") == trade_id or t.get("order_id") == trade_id
-                    ),
-                    None,
-                )
-
-            if not trade:
-                # As a last resort, try to treat trade_id as a symbol (UI may send symbol when trade_id missing)
-                symbol_guess = trade_id if "/" in trade_id else None
-                side_guess = "buy"
-                strategy_guess = ""
-
+                broker_positions = _collect_broker_open_positions()
+                symbol_guess = normalized_input if normalized_input else None
                 if symbol_guess:
-                    trade = {"trade_id": trade_id, "symbol": symbol_guess, "side": side_guess, "strategy": strategy_guess}
-                else:
-                    return {"success": False, "error": "Trade not found"}
-            
+                    broker_match = next((p for p in broker_positions if _symbols_match(p.get('symbol'), symbol_guess)), None)
+                    if broker_match:
+                        # Build synthetic trade shape so close flow can continue.
+                        trade = {
+                            'trade_id': trade_id or symbol_guess,
+                            'symbol': symbol_guess,
+                            'side': broker_match.get('side', 'buy'),
+                            'strategy': f"{broker_match.get('broker', '')}_sync"
+                        }
+
+            if not trade:
+                return {
+                    "success": False,
+                    "error": "Trade not found",
+                    "hint": "Run /api/reconcile_open_trades to inspect local/broker mismatches"
+                }
+
             symbol = trade.get('symbol')
-            side = trade.get('side', 'buy')
-            strategy = trade.get('strategy') or ''  # Handle None case
-            
+            side = str(trade.get('side', 'buy')).lower()
+            strategy = trade.get('strategy') or ''
+
             # Check if position exists in any broker
             position_found_in_broker = False
             broker_used = None
-            
-            # First, try to identify broker from strategy field
+
             if strategy and '_sync' in strategy:
                 broker_name = strategy.replace('_sync', '')
                 broker = app.brokers.get(broker_name)
                 if broker:
                     try:
-                        broker_positions = broker.get_open_positions()
-                        # Check if this position exists in broker
-                        for pos in broker_positions:
-                            broker_symbol = pos.get('symbol', '').replace('_', '/')
-                            broker_side = pos.get('side', 'buy')
-                            # Match by symbol and side
-                            if broker_symbol == symbol and broker_side == side:
+                        for pos in broker.get_open_positions() or []:
+                            if _symbols_match(pos.get('symbol'), symbol) and str(pos.get('side', 'buy')).lower() == side:
                                 position_found_in_broker = True
                                 broker_used = broker
                                 break
                     except Exception as e:
                         print(f"Error checking broker {broker_name} for position: {e}")
-            
-            # If not found by strategy, check all brokers
+
             if not position_found_in_broker and app.brokers:
                 for broker_name, broker in app.brokers.items():
                     try:
-                        broker_positions = broker.get_open_positions()
-                        for pos in broker_positions:
-                            broker_symbol = pos.get('symbol', '').replace('_', '/')
-                            broker_side = pos.get('side', 'buy')
-                            if broker_symbol == symbol and broker_side == side:
+                        for pos in broker.get_open_positions() or []:
+                            if _symbols_match(pos.get('symbol'), symbol) and str(pos.get('side', 'buy')).lower() == side:
                                 position_found_in_broker = True
                                 broker_used = broker
                                 break
@@ -488,70 +573,58 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                     except Exception as e:
                         print(f"Error checking broker {broker_name} for position: {e}")
                         continue
-            
-            # If position exists in broker, close it via API
+
             if position_found_in_broker and broker_used:
                 try:
-                    # Convert side to OrderSide enum
                     order_side = OrderSide.SELL if side == 'buy' else OrderSide.BUY
-                    
-                    # Close position via broker API
                     closed = broker_used.close_position(symbol, order_side)
-                    
+
                     if closed:
-                        # Update local database to mark as closed
-                        # Get current price for exit price
                         try:
                             current_price = broker_used.get_current_price(symbol)
-                        except:
+                        except Exception:
                             current_price = trade.get('entry_price', 0)
-                        
-                        # Calculate final P&L
-                        entry_price = trade.get('entry_price', 0)
-                        quantity = trade.get('quantity', 0)
+
+                        entry_price = float(trade.get('entry_price', 0) or 0)
+                        quantity = float(trade.get('quantity', 0) or 0)
                         if side == 'buy':
                             final_pnl = (current_price - entry_price) * quantity
                         else:
                             final_pnl = (entry_price - current_price) * quantity
-                        
-                        # Update trade in database
-                        app.storage.update_trade(trade_id, {
-                            'status': 'closed',
-                            'exit_price': current_price,
-                            'exit_time': datetime.now(),
-                            'pnl': final_pnl
-                        })
-                        
+
+                        # Update local DB record if known, otherwise best-effort symbol update.
+                        target_trade_id = trade.get('trade_id')
+                        if target_trade_id:
+                            app.storage.update_trade(str(target_trade_id), {
+                                'status': 'closed',
+                                'exit_price': current_price,
+                                'exit_time': datetime.now(),
+                                'pnl': final_pnl
+                            })
+
                         return {
                             "success": True,
                             "message": f"Position {symbol} {side} closed successfully via broker API",
                             "method": "broker_api"
                         }
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"Failed to close position via broker API"
-                        }
+
+                    return {"success": False, "error": "Failed to close position via broker API"}
                 except Exception as e:
-                    return {
-                        "success": False,
-                        "error": f"Error closing position via broker: {str(e)}"
-                    }
-            
-            # Position doesn't exist in broker - delete from local database (phantom position)
-            success = app.storage.delete_trade(trade_id)
-            
+                    return {"success": False, "error": f"Error closing position via broker: {str(e)}"}
+
+            # Not at broker -> delete local phantom trade.
+            target_trade_id = str(trade.get('trade_id') or trade_id)
+            success = app.storage.delete_trade(target_trade_id) if target_trade_id else False
             if success:
                 return {
                     "success": True,
                     "message": f"Phantom position {symbol} {side} deleted from local database",
                     "method": "local_delete"
                 }
-            else:
-                return {"success": False, "error": "Failed to delete trade"}
+            return {"success": False, "error": "Failed to delete trade"}
         except Exception as e:
             return {"success": False, "error": str(e)}
-    
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for real-time updates"""
@@ -1207,7 +1280,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                             <td>$${{pos.current_price || pos.entry_price}}</td>
                             <td class="${{pos.pnl >= 0 ? 'positive' : 'negative'}}">$${{pos.pnl.toFixed(2)}}</td>
                             <td>
-                                <button class="btn-close" onclick="closePosition('${{pos.trade_id}}', '${{pos.symbol}}', '${{pos.side}}')" title="${{buttonTitle}}">
+                                <button class="btn-close" onclick="closePosition('${{pos.trade_id || pos.symbol.replace('/', '_')}}', '${{pos.symbol}}', '${{pos.side}}')" title="${{buttonTitle}}">
                                     ${{buttonText}}
                                 </button>
                             </td>

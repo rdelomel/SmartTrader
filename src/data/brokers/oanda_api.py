@@ -415,6 +415,8 @@ class OANDABroker(BaseBroker):
                     return 5
             
             price_precision = get_price_precision(oanda_symbol)
+            sl_submitted = False
+            tp_submitted = False
             
             if order_type == OrderType.LIMIT:
                 if price is None:
@@ -429,11 +431,13 @@ class OANDABroker(BaseBroker):
                 stop_loss_rounded = round(stop_loss, price_precision)
                 stop_loss_price = f"{stop_loss_rounded:.{price_precision}f}".rstrip('0').rstrip('.')
                 order_data['order']['stopLossOnFill'] = {'price': stop_loss_price}
+                sl_submitted = True
             if take_profit:
                 # Round to appropriate precision and format
                 take_profit_rounded = round(take_profit, price_precision)
                 take_profit_price = f"{take_profit_rounded:.{price_precision}f}".rstrip('0').rstrip('.')
                 order_data['order']['takeProfitOnFill'] = {'price': take_profit_price}
+                tp_submitted = True
             
             # Log order data for debugging
             print(f"  📤 OANDA Order Data: {order_data}")
@@ -543,7 +547,12 @@ class OANDABroker(BaseBroker):
                 'symbol': symbol,
                 'side': side.value,
                 'price': fill_price,
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(),
+                'stop_loss_requested': bool(stop_loss),
+                'take_profit_requested': bool(take_profit),
+                'stop_loss_submitted': sl_submitted,
+                'take_profit_submitted': tp_submitted,
+                'bracket_supported': True
             }
         except requests.exceptions.HTTPError as e:
             # Handle HTTP errors with better error messages

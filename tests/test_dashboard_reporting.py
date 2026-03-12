@@ -5,8 +5,8 @@ from fastapi.testclient import TestClient
 
 
 class FakeStorage:
-    def get_all_trades(self, limit=500):
-        trades = [
+    def __init__(self):
+        self.trades = [
             {
                 'trade_id': 't1',
                 'symbol': 'BTC/USD',
