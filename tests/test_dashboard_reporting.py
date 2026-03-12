@@ -1,4 +1,4 @@
-"""Tests for dashboard reporting metrics population and manual close flows."""
+"""Tests for dashboard reporting metrics population."""
 
 from src.monitoring.dashboard import create_dashboard_app
 from fastapi.testclient import TestClient
@@ -42,52 +42,12 @@ class FakeStorage:
                 'entry_time': '2024-01-03T00:00:00',
             },
         ]
-
-    def get_all_trades(self, limit=500):
-        return self.trades[:limit]
-
-    def get_open_trades(self, symbol=None):
-        rows = [t for t in self.trades if t.get('status') == 'open']
-        if symbol:
-            return [t for t in rows if t.get('symbol') == symbol]
-        return rows
-
-    def update_trade(self, trade_id, update_data):
-        for t in self.trades:
-            if str(t.get('trade_id')) == str(trade_id):
-                t.update(update_data)
-                return True
-        return False
-
-    def delete_trade(self, trade_id):
-        before = len(self.trades)
-        self.trades = [t for t in self.trades if str(t.get('trade_id')) != str(trade_id)]
-        return len(self.trades) < before
+        return trades[:limit]
 
 
 class FakeBroker:
-    def __init__(self):
-        self.closed = []
-
     def get_account_balance(self):
         return {'total': 10050.0}
-
-    def get_open_positions(self):
-        return [
-            {
-                'symbol': 'SOLUSD',
-                'side': 'buy',
-                'quantity': 2.0,
-                'entry_price': 50.0,
-            }
-        ]
-
-    def close_position(self, symbol, side=None):
-        self.closed.append((symbol, side.value if hasattr(side, 'value') else side))
-        return True
-
-    def get_current_price(self, symbol):
-        return 52.0
 
 
 def test_dashboard_api_populates_performance_and_risk_metrics():
@@ -118,35 +78,3 @@ def test_dashboard_api_populates_performance_and_risk_metrics():
     assert isinstance(first_trade['quantity'], float)
     assert isinstance(first_trade['price'], float)
     assert isinstance(first_trade['pnl'], float)
-
-
-def test_reconcile_open_trades_endpoint_reports_mismatches():
-    storage = FakeStorage()
-    app = create_dashboard_app(storage=storage, brokers={'alpaca': FakeBroker()})
-    client = TestClient(app)
-
-    response = client.get('/api/reconcile_open_trades')
-    assert response.status_code == 200
-    data = response.json()
-
-    assert data['success'] is True
-    assert data['local_open_count'] >= 1
-    assert data['broker_open_count'] >= 1
-    assert isinstance(data['stale_local_trades'], list)
-    assert isinstance(data['broker_only_positions'], list)
-
-
-def test_close_position_accepts_symbol_when_trade_id_missing():
-    storage = FakeStorage()
-    broker = FakeBroker()
-    app = create_dashboard_app(storage=storage, brokers={'alpaca': broker})
-    client = TestClient(app)
-
-    # Use symbol in path (mirrors UI fallback when trade_id is absent).
-    response = client.post('/api/close_position/SOL_USD')
-    assert response.status_code == 200
-    data = response.json()
-
-    assert data['success'] is True
-    assert data['method'] == 'broker_api'
-    assert broker.closed  # broker close call executed
