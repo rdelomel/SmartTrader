@@ -73,168 +73,6 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                 print(f"Error collecting positions from broker {broker_name}: {e}")
         return positions
 
-    def _build_trusted_dashboard_snapshot() -> Dict:
-        """Build a broker-reconciled, reporting-backed dashboard snapshot."""
-
-        def _normalize_trade(trade: Dict) -> Dict:
-            quantity = trade.get('quantity') or trade.get('filled_qty') or 0.0
-            entry_price = trade.get('entry_price') or trade.get('price') or 0.0
-            exit_price = trade.get('exit_price') or trade.get('price') or entry_price
-            status = (trade.get('status') or '').lower()
-            display_price = exit_price if status == 'closed' else entry_price
-            return {
-                'trade_id': trade.get('trade_id') or trade.get('order_id') or '',
-                'symbol': trade.get('symbol', ''),
-                'side': trade.get('side', ''),
-                'quantity': float(quantity or 0.0),
-                'price': float(display_price or 0.0),
-                'pnl': float(trade.get('pnl', 0.0) or 0.0),
-                'time': trade.get('exit_time') or trade.get('entry_time') or datetime.now().isoformat(),
-                'status': status,
-                'entry_price': float(entry_price or 0.0),
-                'exit_price': float(exit_price or 0.0)
-            }
-
-        all_trades = app.storage.get_all_trades(limit=1000) if (app.storage and hasattr(app.storage, 'get_all_trades')) else []
-        local_open = app.storage.get_open_trades() if (app.storage and hasattr(app.storage, 'get_open_trades')) else []
-        closed_trades = [t for t in all_trades if t.get('status') == 'closed']
-        broker_open = _collect_broker_open_positions()
-
-        # Refresh balance from brokers if possible; fallback to cached value.
-        total_balance = 0.0
-        if app.brokers:
-            for broker in app.brokers.values():
-                try:
-                    balance_info = broker.get_account_balance()
-                    total_balance += float(balance_info.get('total', 0.0) or 0.0)
-                except Exception:
-                    pass
-        if total_balance <= 0:
-            total_balance = float(dashboard_data.get('balance', 0.0) or 0.0)
-
-        # Build broker-verified position view from local open trades.
-        positions = []
-        matched_count = 0
-        stale_local = []
-        for t in local_open:
-            t_symbol = _normalize_symbol(t.get('symbol'))
-            t_side = str(t.get('side', 'buy')).lower()
-            broker_match = next(
-                (p for p in broker_open if _symbols_match(p.get('symbol'), t_symbol) and p.get('side') == t_side),
-                None
-            )
-            verified = broker_match is not None
-            if verified:
-                matched_count += 1
-            else:
-                stale_local.append({'trade_id': t.get('trade_id'), 'symbol': t.get('symbol'), 'side': t.get('side')})
-
-            entry_price = float(t.get('entry_price', 0.0) or 0.0)
-            current_price = entry_price
-            if broker_match:
-                raw = broker_match.get('raw', {})
-                current_price = float(raw.get('current_price', raw.get('market_price', entry_price)) or entry_price)
-
-            quantity = float(t.get('quantity', 0.0) or 0.0)
-            pnl = float(t.get('pnl', 0.0) or 0.0)
-            if entry_price > 0 and current_price > 0 and quantity > 0:
-                pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
-
-            positions.append({
-                'trade_id': t.get('trade_id'),
-                'symbol': t.get('symbol'),
-                'side': t.get('side', 'buy'),
-                'quantity': quantity,
-                'entry_price': entry_price,
-                'current_price': current_price,
-                'pnl': pnl,
-                'strategy': t.get('strategy', 'smarttrader'),
-                'verified_at_broker': verified,
-                'broker': broker_match.get('broker') if broker_match else None
-            })
-
-        broker_only = []
-        for p in broker_open:
-            exists = any(_symbols_match(t.get('symbol'), p.get('symbol')) and str(t.get('side', 'buy')).lower() == p.get('side') for t in local_open)
-            if not exists:
-                broker_only.append({'broker': p.get('broker'), 'symbol': p.get('symbol'), 'side': p.get('side')})
-
-        report_data = reporter.generate_report() if reporter else None
-        general = report_data.get('general', {}) if report_data else {}
-        advanced = report_data.get('advanced', {}) if report_data else {}
-        periods = report_data.get('periods', {}) if report_data else {}
-        monthly = report_data.get('monthly_analytics', []) if report_data else []
-        equity_curve = report_data.get('equity_curve', []) if report_data else []
-
-        realized_pnl = float(general.get('net_profit', sum((t.get('pnl', 0) or 0) for t in closed_trades)) or 0.0)
-        unrealized_pnl = float(sum((p.get('pnl', 0) or 0) for p in positions) or 0.0)
-        equity = total_balance + unrealized_pnl
-        initial_eq = float((reporter.initial_equity if reporter else 10000.0) or 10000.0)
-        total_return = ((equity - initial_eq) / initial_eq * 100) if initial_eq > 0 else 0.0
-
-        peak_equity = max([point.get('equity', 0.0) for point in equity_curve], default=initial_eq)
-        current_drawdown = max(0.0, min(100.0, ((peak_equity - equity) / peak_equity * 100))) if peak_equity > 0 else 0.0
-
-        local_open_count = len(local_open)
-        broker_open_count = len(broker_open)
-        stale_local_count = len(stale_local)
-        broker_only_count = len(broker_only)
-        mismatch_total = stale_local_count + broker_only_count
-        denom = max(local_open_count + broker_open_count, 1)
-        integrity_score = max(0.0, 100.0 - (mismatch_total / denom) * 100.0)
-
-        normalized_recent_trades = [_normalize_trade(t) for t in sorted(
-            all_trades,
-            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
-            reverse=True
-        )[:50]]
-
-        return {
-            'equity': float(equity),
-            'balance': float(total_balance),
-            'positions': positions,
-            'trades': normalized_recent_trades,
-            'performance': {
-                'total_return': float(total_return),
-                'realized_pnl': float(realized_pnl),
-                'unrealized_pnl': float(unrealized_pnl),
-                'total_trades': int(general.get('total_trades', len(closed_trades)) or 0),
-                'win_rate': float(general.get('win_rate', 0.0) or 0.0),
-                'loss_rate': float(general.get('loss_rate', 0.0) or 0.0),
-                'sharpe_ratio': float(advanced.get('sharpe_ratio', 0.0) or 0.0),
-                'sortino_ratio': float(advanced.get('sortino_ratio', 0.0) or 0.0),
-                'profit_factor': float(general.get('profit_factor', 0.0) or 0.0),
-                'expectancy': float(advanced.get('expectancy', 0.0) or 0.0),
-                'average_trade': float(advanced.get('average_trade', 0.0) or 0.0),
-                'initial_equity': float(initial_eq)
-            },
-            'risk_metrics': {
-                'drawdown_percent': float(current_drawdown),
-                'peak_equity': float(peak_equity),
-                'current_equity': float(equity),
-                'max_drawdown_percent': float(advanced.get('max_drawdown', 0.0) or 0.0),
-                'standard_deviation': float(advanced.get('standard_deviation', 0.0) or 0.0)
-            },
-            'data_quality': {
-                'integrity_score': float(integrity_score),
-                'matched_open_trades': int(matched_count),
-                'local_open_count': int(local_open_count),
-                'broker_open_count': int(broker_open_count),
-                'stale_local_count': int(stale_local_count),
-                'broker_only_count': int(broker_only_count),
-                'stale_local_trades': stale_local,
-                'broker_only_positions': broker_only,
-                'last_reconciled_at': datetime.now().isoformat()
-            },
-            'report': {
-                'general': general,
-                'periods': periods,
-                'advanced': advanced,
-                'equity_curve': equity_curve[-300:],
-                'monthly_analytics': monthly[-36:]
-            }
-        }
-
     
     @app.get("/")
     async def get_dashboard():
@@ -508,10 +346,89 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     
     @app.get("/api/dashboard")
     async def get_dashboard_api():
-        """Get trusted dashboard data as JSON, reconciled with broker positions."""
+        """Get dashboard data as JSON populated from storage/brokers when available."""
+
+        def _normalize_trade(trade: Dict) -> Dict:
+            """Normalize trade shape for dashboard UI rendering."""
+            quantity = trade.get('quantity') or trade.get('filled_qty') or 0.0
+            entry_price = trade.get('entry_price') or trade.get('price') or 0.0
+            exit_price = trade.get('exit_price') or trade.get('price') or entry_price
+            status = (trade.get('status') or '').lower()
+            # Closed trades should display exit price, open trades entry/current as fallback.
+            display_price = exit_price if status == 'closed' else entry_price
+            return {
+                'trade_id': trade.get('trade_id') or trade.get('order_id') or '',
+                'symbol': trade.get('symbol', ''),
+                'side': trade.get('side', ''),
+                'quantity': float(quantity or 0.0),
+                'price': float(display_price or 0.0),
+                'pnl': float(trade.get('pnl', 0.0) or 0.0),
+                'time': trade.get('exit_time') or trade.get('entry_time') or datetime.now().isoformat(),
+                'status': status
+            }
+
         try:
-            snapshot = _build_trusted_dashboard_snapshot()
-            dashboard_data.update(snapshot)
+            positions = dashboard_data.get('positions', [])
+            all_trades = app.storage.get_all_trades(limit=500) if (app.storage and hasattr(app.storage, 'get_all_trades')) else []
+            closed_trades = [t for t in all_trades if t.get('status') == 'closed']
+
+            # Refresh balance from brokers if possible; otherwise keep current dashboard balance.
+            total_balance = 0.0
+            if app.brokers:
+                for broker in app.brokers.values():
+                    try:
+                        balance_info = broker.get_account_balance()
+                        total_balance += float(balance_info.get('total', 0.0) or 0.0)
+                    except Exception:
+                        pass
+            if total_balance <= 0:
+                total_balance = float(dashboard_data.get('balance', 0.0) or 0.0)
+
+            # Reporter-backed metrics (single source of truth for dashboard/report parity)
+            report_data = reporter.generate_report() if reporter else None
+            general = report_data.get('general', {}) if report_data else {}
+            advanced = report_data.get('advanced', {}) if report_data else {}
+            equity_curve = report_data.get('equity_curve', []) if report_data else []
+
+            realized_pnl = float(general.get('net_profit', sum((t.get('pnl', 0) or 0) for t in closed_trades)) or 0.0)
+            unrealized_pnl = float(sum((p.get('pnl', 0) or 0) for p in positions) or 0.0)
+            equity = total_balance + unrealized_pnl
+            initial_eq = float((reporter.initial_equity if reporter else 10000.0) or 10000.0)
+            total_return = ((equity - initial_eq) / initial_eq * 100) if initial_eq > 0 else 0.0
+
+            peak_equity = max([point.get('equity', 0.0) for point in equity_curve], default=initial_eq)
+            current_drawdown = 0.0
+            if peak_equity > 0:
+                current_drawdown = max(0.0, min(100.0, ((peak_equity - equity) / peak_equity * 100)))
+
+            normalized_recent_trades = [_normalize_trade(t) for t in sorted(
+                all_trades,
+                key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+                reverse=True
+            )[:30]]
+
+            dashboard_data.update({
+                'equity': float(equity),
+                'balance': float(total_balance),
+                'positions': positions,
+                'trades': normalized_recent_trades,
+                'performance': {
+                    'total_return': float(total_return),
+                    'realized_pnl': float(realized_pnl),
+                    'unrealized_pnl': float(unrealized_pnl),
+                    'total_trades': int(general.get('total_trades', len(closed_trades)) or 0),
+                    'win_rate': float(general.get('win_rate', 0.0) or 0.0),
+                    'loss_rate': float(general.get('loss_rate', 0.0) or 0.0),
+                    'sharpe_ratio': float(advanced.get('sharpe_ratio', 0.0) or 0.0),
+                    'initial_equity': float(initial_eq)
+                },
+                'risk_metrics': {
+                    'drawdown_percent': float(current_drawdown),
+                    'peak_equity': float(peak_equity),
+                    'current_equity': float(equity),
+                    'max_drawdown_percent': float(advanced.get('max_drawdown', 0.0) or 0.0)
+                }
+            })
         except Exception as e:
             print(f"Error loading dashboard data from database: {e}")
 
@@ -528,30 +445,41 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                 'broker_only_positions': []
             }
 
-        snapshot = _build_trusted_dashboard_snapshot()
-        dq = snapshot.get('data_quality', {})
+        local_open = app.storage.get_open_trades() if hasattr(app.storage, 'get_open_trades') else []
+        broker_open = _collect_broker_open_positions()
+
+        stale_local = []
+        for t in local_open:
+            t_symbol = _normalize_symbol(t.get('symbol'))
+            t_side = str(t.get('side', 'buy')).lower()
+            exists = any(_symbols_match(t_symbol, p.get('symbol')) and t_side == p.get('side') for p in broker_open)
+            if not exists:
+                stale_local.append({
+                    'trade_id': t.get('trade_id'),
+                    'symbol': t.get('symbol'),
+                    'side': t.get('side')
+                })
+
+        broker_only = []
+        for p in broker_open:
+            exists = any(
+                _symbols_match(t.get('symbol'), p.get('symbol')) and str(t.get('side', 'buy')).lower() == p.get('side')
+                for t in local_open
+            )
+            if not exists:
+                broker_only.append({
+                    'broker': p.get('broker'),
+                    'symbol': p.get('symbol'),
+                    'side': p.get('side')
+                })
+
         return {
             'success': True,
-            'local_open_count': dq.get('local_open_count', 0),
-            'broker_open_count': dq.get('broker_open_count', 0),
-            'matched_open_trades': dq.get('matched_open_trades', 0),
-            'integrity_score': dq.get('integrity_score', 0.0),
-            'stale_local_trades': dq.get('stale_local_trades', []),
-            'broker_only_positions': dq.get('broker_only_positions', []),
-            'last_reconciled_at': dq.get('last_reconciled_at')
+            'local_open_count': len(local_open),
+            'broker_open_count': len(broker_open),
+            'stale_local_trades': stale_local,
+            'broker_only_positions': broker_only
         }
-
-    @app.get("/api/report")
-    async def get_report_api():
-        """Return report payload used by MyFxBook-style analytics tabs."""
-        snapshot = _build_trusted_dashboard_snapshot()
-        return _serialize_datetime({
-            'success': True,
-            'report': snapshot.get('report', {}),
-            'performance': snapshot.get('performance', {}),
-            'risk_metrics': snapshot.get('risk_metrics', {}),
-            'data_quality': snapshot.get('data_quality', {})
-        })
 
     @app.post("/api/close_position/{trade_id}")
     async def close_position(trade_id: str):
