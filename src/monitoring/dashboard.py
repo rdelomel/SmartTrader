@@ -1262,6 +1262,18 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                         <div class="metric-value">${{data.performance.total_trades || 0}}</div>
                         <div class="metric-label">Total Trades</div>
                     </div>
+                    <div class="metric">
+                        <div class="metric-value">${{data.performance.profit_factor?.toFixed(2) || 0}}</div>
+                        <div class="metric-label">Profit Factor</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${{data.performance.expectancy?.toFixed(2) || 0}}</div>
+                        <div class="metric-label">Expectancy</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${{data.data_quality?.integrity_score?.toFixed(1) || 0}}%</div>
+                        <div class="metric-label">Data Integrity Score</div>
+                    </div>
                 `;
                 
                 // Update positions
@@ -1273,7 +1285,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                     
                     return `
                         <tr>
-                            <td>${{pos.symbol}}</td>
+                            <td>${{pos.symbol}} ${{pos.verified_at_broker ? '✅' : '⚠️'}}</td>
                             <td>${{pos.side}}</td>
                             <td>${{pos.quantity}}</td>
                             <td>$${{pos.entry_price}}</td>
@@ -1308,10 +1320,22 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                 // Update risk metrics
                 const riskMetricsDiv = document.getElementById('risk-metrics');
                 if (data.risk_metrics) {{
+                    const dq = data.data_quality || {{}};
+                    const staleRows = (dq.stale_local_trades || []).slice(0,5).map(t => `<li>${{t.symbol}} (${{t.side}})</li>`).join('');
+                    const brokerOnlyRows = (dq.broker_only_positions || []).slice(0,5).map(t => `<li>${{t.symbol}} (${{t.side}} @ ${{t.broker}})</li>`).join('');
                     riskMetricsDiv.innerHTML = `
                         <p><strong>Drawdown:</strong> ${{data.risk_metrics.drawdown_percent?.toFixed(2) || 0}}%</p>
                         <p><strong>Peak Equity:</strong> $${{data.risk_metrics.peak_equity?.toFixed(2) || 0}}</p>
                         <p><strong>Current Equity:</strong> $${{data.risk_metrics.current_equity?.toFixed(2) || 0}}</p>
+                        <p><strong>Max Drawdown:</strong> ${{data.risk_metrics.max_drawdown_percent?.toFixed(2) || 0}}%</p>
+                        <hr/>
+                        <p><strong>Data Integrity:</strong> ${{dq.integrity_score?.toFixed(1) || 0}}%</p>
+                        <p><strong>Matched Open Trades:</strong> ${{dq.matched_open_trades || 0}} / ${{dq.local_open_count || 0}}</p>
+                        <p><strong>Broker-only Positions:</strong> ${{dq.broker_only_count || 0}}</p>
+                        <p><strong>Stale Local Trades:</strong> ${{dq.stale_local_count || 0}}</p>
+                        <p><strong>Last Reconciled:</strong> ${{dq.last_reconciled_at ? new Date(dq.last_reconciled_at).toLocaleString() : 'N/A'}}</p>
+                        ${{staleRows ? `<details><summary>Stale Local Trades</summary><ul>${{staleRows}}</ul></details>` : ''}}
+                        ${{brokerOnlyRows ? `<details><summary>Broker-only Positions</summary><ul>${{brokerOnlyRows}}</ul></details>` : ''}}
                     `;
                 }}
             }}
