@@ -17,6 +17,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ── Layer 1b: enforce numpy<2.0 BEFORE torch/TF so they don't upgrade it ──────
+RUN pip install --no-cache-dir "numpy>=1.24.0,<2.0.0"
+
 # ── Layer 2: PyTorch CPU-only (slim wheel - avoids pulling CUDA ~5GB) ─────────
 # Pinned to torch 2.2.2 CPU which is compatible with stable-baselines3 >=2.0
 RUN pip install --no-cache-dir \
