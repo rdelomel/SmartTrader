@@ -131,14 +131,30 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
 
             entry_price = float(t.get('entry_price', 0.0) or 0.0)
             current_price = entry_price
+            pnl = float(t.get('pnl', 0.0) or 0.0)
+
             if broker_match:
                 raw = broker_match.get('raw', {})
-                current_price = float(raw.get('current_price', raw.get('market_price', entry_price)) or entry_price)
+                # Prefer broker's entry price (more accurate - OANDA averagePrice)
+                broker_entry = float(raw.get('entry_price', raw.get('averagePrice', entry_price)) or entry_price)
+                if broker_entry > 0:
+                    entry_price = broker_entry
+                # Use broker's current/market price
+                broker_current = float(raw.get('current_price', raw.get('market_price', 0)) or 0)
+                if broker_current > 0:
+                    current_price = broker_current
+                # Use broker's unrealized P&L directly (most accurate - includes spread/swap)
+                broker_pnl = raw.get('unrealized_pnl')
+                if broker_pnl is not None:
+                    pnl = float(broker_pnl)
+                elif entry_price > 0 and current_price > 0:
+                    quantity = float(t.get('quantity', 0.0) or 0.0)
+                    pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
+            elif entry_price > 0 and current_price > 0:
+                quantity = float(t.get('quantity', 0.0) or 0.0)
+                pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
 
             quantity = float(t.get('quantity', 0.0) or 0.0)
-            pnl = float(t.get('pnl', 0.0) or 0.0)
-            if entry_price > 0 and current_price > 0 and quantity > 0:
-                pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
 
             positions.append({
                 'trade_id': t.get('trade_id'),

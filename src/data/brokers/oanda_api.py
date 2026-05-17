@@ -611,21 +611,35 @@ class OANDABroker(BaseBroker):
             short_units = float(pos.get('short', {}).get('units', 0))
             
             if long_units != 0:
+                entry_price = float(pos.get('long', {}).get('averagePrice', 0))
+                unrealized_pnl = float(pos.get('long', {}).get('unrealizedPL', 0))
+                quantity = abs(long_units)
+                # Derive current_price from unrealized P&L: pnl = (current - entry) * qty
+                current_price = entry_price + (unrealized_pnl / quantity) if quantity > 0 else entry_price
                 positions.append({
                     'symbol': pos['instrument'],
                     'side': 'buy',
-                    'quantity': abs(long_units),
-                    'entry_price': float(pos.get('long', {}).get('averagePrice', 0)),
-                    'unrealized_pnl': float(pos.get('long', {}).get('unrealizedPL', 0))
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'current_price': round(current_price, 6),
+                    'market_price': round(current_price, 6),
+                    'unrealized_pnl': unrealized_pnl
                 })
             
             if short_units != 0:
+                entry_price = float(pos.get('short', {}).get('averagePrice', 0))
+                unrealized_pnl = float(pos.get('short', {}).get('unrealizedPL', 0))
+                quantity = abs(short_units)
+                # Derive current_price from unrealized P&L: pnl = (entry - current) * qty  (short)
+                current_price = entry_price - (unrealized_pnl / quantity) if quantity > 0 else entry_price
                 positions.append({
                     'symbol': pos['instrument'],
                     'side': 'sell',
-                    'quantity': abs(short_units),
-                    'entry_price': float(pos.get('short', {}).get('averagePrice', 0)),
-                    'unrealized_pnl': float(pos.get('short', {}).get('unrealizedPL', 0))
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'current_price': round(current_price, 6),
+                    'market_price': round(current_price, 6),
+                    'unrealized_pnl': unrealized_pnl
                 })
         
         return positions
