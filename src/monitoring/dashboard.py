@@ -1475,56 +1475,56 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
             window.monthlyData = {monthly_data_json};
             window.monthlyChartInstance = null;
 
-            function renderMonthlyChart(year) {
+            function renderMonthlyChart(year) {{
                 const yearData = window.monthlyData.filter(d => d.year === String(year));
                 const labels = yearData.map(d => d.month);
                 const gains = yearData.map(d => parseFloat(d.gain_pct).toFixed(2));
                 const colors = ['#b388b8', '#e38484', '#61b3b1', '#fdb68b', '#b9d66f', '#77a4e6', '#c9c27f', '#d78ec5', '#8cd2b8', '#e3b26c', '#67a3a1', '#e88f8f'];
                 
                 const ctx = document.getElementById('monthlyChart').getContext('2d');
-                if (window.monthlyChartInstance) {
+                if (window.monthlyChartInstance) {{
                     window.monthlyChartInstance.destroy();
-                }
+                }}
                 
-                window.monthlyChartInstance = new Chart(ctx, {
+                window.monthlyChartInstance = new Chart(ctx, {{
                     type: 'bar',
-                    data: {
+                    data: {{
                         labels: labels,
-                        datasets: [{
+                        datasets: [{{
                             label: 'Monthly Gain(Change)',
                             data: gains,
                             backgroundColor: labels.map((l, i) => colors[i % colors.length])
-                        }]
-                    },
+                        }}]
+                    }},
                     plugins: [ChartDataLabels],
-                    options: {
+                    options: {{
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false },
-                            title: { display: true, text: 'Monthly Gain(Change)', font: { size: 16 } },
-                            datalabels: {
+                        plugins: {{
+                            legend: {{ display: false }},
+                            title: {{ display: true, text: 'Monthly Gain(Change)', font: {{ size: 16 }} }},
+                            datalabels: {{
                                 anchor: 'end',
                                 align: 'top',
-                                formatter: function(value) { return value + "%"; },
-                                font: { weight: 'bold' }
-                            }
-                        },
-                        scales: {
-                            y: {
+                                formatter: function(value) {{ return value + "%"; }},
+                                font: {{ weight: 'bold' }}
+                            }}
+                        }},
+                        scales: {{
+                            y: {{
                                 beginAtZero: true,
-                                ticks: { callback: function(value) { return value + "%" } },
+                                ticks: {{ callback: function(value) {{ return value + "%" }} }},
                                 suggestedMax: Math.max(...gains.map(Number)) * 1.2
-                            }
-                        }
-                    }
-                });
+                            }}
+                        }}
+                    }}
+                }});
                 
-                document.querySelectorAll('#monthly-tabs .tab').forEach(t => {
-                    if (t.textContent === String(year)) { t.classList.add('active'); }
-                    else { t.classList.remove('active'); }
-                });
-            }
+                document.querySelectorAll('#monthly-tabs .tab').forEach(t => {{
+                    if (t.textContent === String(year)) {{ t.classList.add('active'); }}
+                    else {{ t.classList.remove('active'); }}
+                }});
+            }}
 
             // Initialize charts for Reports tab
             function initializeCharts() {{
@@ -1585,22 +1585,22 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                 }}
                 
                 // Monthly Chart setup
-                if (window.monthlyData && window.monthlyData.length > 0 && !window.monthlyChartSetup) {
+                if (window.monthlyData && window.monthlyData.length > 0 && !window.monthlyChartSetup) {{
                     const monthlyTabsDiv = document.getElementById('monthly-tabs');
                     const years = [...new Set(window.monthlyData.map(d => d.year))].sort();
-                    if (years.length > 0 && monthlyTabsDiv) {
-                        years.forEach(year => {
+                    if (years.length > 0 && monthlyTabsDiv) {{
+                        years.forEach(year => {{
                             const btn = document.createElement('button');
                             btn.className = 'tab';
                             btn.textContent = year;
                             btn.onclick = () => renderMonthlyChart(year);
                             monthlyTabsDiv.appendChild(btn);
-                        });
+                        }});
                         renderMonthlyChart(years[years.length - 1]);
                         window.monthlyChartSetup = true;
-                    }
-                }
-            }
+                    }}
+                }}
+            }}
         </script>
     </body>
     </html>
