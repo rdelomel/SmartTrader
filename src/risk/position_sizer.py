@@ -46,7 +46,8 @@ class PositionSizer:
         stop_loss: float,
         data: Optional[pd.DataFrame] = None,
         recent_sharpe: Optional[float] = None,
-        consecutive_wins: Optional[int] = None
+        consecutive_wins: Optional[int] = None,
+        symbol: str = ""
     ) -> Dict:
         """
         Calculate position size based on risk parameters with dynamic scaling
@@ -58,12 +59,31 @@ class PositionSizer:
             data: Optional market data for volatility-based sizing
             recent_sharpe: Recent Sharpe ratio for performance-based scaling (optional)
             consecutive_wins: Number of consecutive wins for win streak bonus (optional)
+            symbol: Trading symbol to determine quote currency
         
         Returns:
             Dictionary with position size information
         """
         # Calculate risk per share/unit
         risk_per_unit = abs(entry_price - stop_loss)
+        
+        # Normalize risk_per_unit for pairs where quote currency is not USD
+        # e.g. USD/JPY, EUR/GBP
+        if symbol:
+            symbol_upper = symbol.upper()
+            is_quote_usd = True
+            
+            if '/' in symbol_upper:
+                quote = symbol_upper.split('/')[1]
+                if quote != 'USD':
+                    is_quote_usd = False
+            elif len(symbol_upper) >= 6 and not symbol_upper.endswith('USD'):
+                is_quote_usd = False
+                
+            if not is_quote_usd and entry_price > 0:
+                # Convert risk from quote currency back to base currency (approx USD)
+                risk_per_unit = risk_per_unit / entry_price
+
         
         if risk_per_unit == 0:
             return {

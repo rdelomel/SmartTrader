@@ -181,7 +181,8 @@ class RiskManagerAgent(BaseAgent):
     def calculate_position_size(self, account_balance: float, entry_price: float,
                                stop_loss: float, data: pd.DataFrame,
                                regime: str = 'Neutral', 
-                               performance_tracker: Optional[object] = None) -> Dict:
+                               performance_tracker: Optional[object] = None,
+                               symbol: str = "") -> Dict:
         """
         Calculate position size with regime-based adjustments and dynamic scaling
         
@@ -219,7 +220,8 @@ class RiskManagerAgent(BaseAgent):
         position_info = self.position_sizer.calculate_position_size(
             account_balance, entry_price, stop_loss, data,
             recent_sharpe=recent_sharpe,
-            consecutive_wins=consecutive_wins
+            consecutive_wins=consecutive_wins,
+            symbol=symbol
         )
         
         # Regime-based adjustment

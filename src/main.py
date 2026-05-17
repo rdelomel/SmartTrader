@@ -1390,7 +1390,7 @@ class TradingAgent:
                 if stop_loss is None:
                     stop_loss = entry_price * 0.98
                 position_info = self.position_sizer.calculate_position_size(
-                    available_balance, entry_price, stop_loss, data  # Use available, not total
+                    available_balance, entry_price, stop_loss, data, symbol=symbol
                 )
                 print(f"  Calculated position size: {position_info}")
             

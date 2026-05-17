@@ -440,7 +440,8 @@ class OrchestratorAgent(BaseAgent):
                     entry_price = data['close'].iloc[-1]
                     position_size_info = self.risk_agent.calculate_position_size(
                         account_balance, entry_price, stop_loss, data, current_regime,
-                        performance_tracker=self.performance_tracker
+                        performance_tracker=self.performance_tracker,
+                        symbol=symbol
                     )
                     
                     # Adjust position size based on DRL action if available

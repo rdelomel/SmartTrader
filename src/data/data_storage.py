@@ -1,6 +1,6 @@
 """Data storage module for historical data and trade records"""
 
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean, text
+from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean, text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
@@ -17,6 +17,9 @@ Base = declarative_base()
 class OHLCVData(Base):
     """OHLCV price data table"""
     __tablename__ = 'ohlcv_data'
+    __table_args__ = (
+        UniqueConstraint('symbol', 'timeframe', 'timestamp', name='uix_symbol_timeframe_timestamp'),
+    )
     
     id = Column(Integer, primary_key=True)
     symbol = Column(String, nullable=False, index=True)
@@ -368,7 +371,8 @@ class DataStorage:
                     Trade.symbol == symbol,
                     Trade.side == side,
                     Trade.status == 'open',
-                    abs(Trade.entry_price - entry_price) < entry_price * 0.01  # Within 1%
+                    Trade.entry_price >= entry_price * 0.99,
+                    Trade.entry_price <= entry_price * 1.01
                 ).first()
                 
                 if existing_open:

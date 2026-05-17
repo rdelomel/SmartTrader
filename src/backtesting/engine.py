@@ -129,7 +129,7 @@ class BacktestEngine:
                     stop_loss = signal_data.get('stop_loss', entry_price * 0.98)
                     
                     position_info = self.position_sizer.calculate_position_size(
-                        capital, entry_price, stop_loss, current_data
+                        capital, entry_price, stop_loss, current_data, symbol='TEST'
                     )
                     
                     if position_info['quantity'] > 0:
