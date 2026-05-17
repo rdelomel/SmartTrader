@@ -773,6 +773,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
     advanced = report_data.get('advanced', {}) if report_data else {}
     equity_curve = report_data.get('equity_curve', []) if report_data else []
     monthly = report_data.get('monthly_analytics', []) if report_data else []
+    monthly_data_json = json.dumps([m for m in monthly if isinstance(m, dict)])
     
     # Prepare equity curve data for Chart.js
     equity_labels = [str(point.get('date', ''))[:10] for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
@@ -789,6 +790,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
     <head>
         <title>SmartTrader - Unified Dashboard</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ 
@@ -1214,7 +1216,11 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                 </div>
                 
                 <div class="card">
-                    <h2>📆 Monthly Analytics</h2>
+                    <div style="display: flex; justify-content: flex-start; align-items: center; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px;">
+                        <h2 style="margin-bottom: 0; border-bottom: none; padding-right: 20px;">📆 Monthly Analytics</h2>
+                        <div class="tabs" style="border-bottom: none; margin-bottom: 0;" id="monthly-tabs">
+                        </div>
+                    </div>
                     <div class="chart-container">
                         <canvas id="monthlyChart"></canvas>
                     </div>
@@ -1465,6 +1471,61 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                 }}
             }}
             
+            // Monthly Data Global
+            window.monthlyData = {monthly_data_json};
+            window.monthlyChartInstance = null;
+
+            function renderMonthlyChart(year) {
+                const yearData = window.monthlyData.filter(d => d.year === String(year));
+                const labels = yearData.map(d => d.month);
+                const gains = yearData.map(d => parseFloat(d.gain_pct).toFixed(2));
+                const colors = ['#b388b8', '#e38484', '#61b3b1', '#fdb68b', '#b9d66f', '#77a4e6', '#c9c27f', '#d78ec5', '#8cd2b8', '#e3b26c', '#67a3a1', '#e88f8f'];
+                
+                const ctx = document.getElementById('monthlyChart').getContext('2d');
+                if (window.monthlyChartInstance) {
+                    window.monthlyChartInstance.destroy();
+                }
+                
+                window.monthlyChartInstance = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Monthly Gain(Change)',
+                            data: gains,
+                            backgroundColor: labels.map((l, i) => colors[i % colors.length])
+                        }]
+                    },
+                    plugins: [ChartDataLabels],
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            title: { display: true, text: 'Monthly Gain(Change)', font: { size: 16 } },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                formatter: function(value) { return value + "%"; },
+                                font: { weight: 'bold' }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: { callback: function(value) { return value + "%" } },
+                                suggestedMax: Math.max(...gains.map(Number)) * 1.2
+                            }
+                        }
+                    }
+                });
+                
+                document.querySelectorAll('#monthly-tabs .tab').forEach(t => {
+                    if (t.textContent === String(year)) { t.classList.add('active'); }
+                    else { t.classList.remove('active'); }
+                });
+            }
+
             // Initialize charts for Reports tab
             function initializeCharts() {{
                 // Equity Chart
@@ -1523,31 +1584,23 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                     }});
                 }}
                 
-                // Monthly Chart
-                const monthlyCtx = document.getElementById('monthlyChart');
-                if (monthlyCtx && {json.dumps(len(monthly_labels))} > 0) {{
-                    new Chart(monthlyCtx.getContext('2d'), {{
-                        type: 'bar',
-                        data: {{
-                            labels: {json.dumps(monthly_labels)},
-                            datasets: [{{
-                                label: 'Monthly Gain %',
-                                data: {json.dumps(monthly_gains)},
-                                backgroundColor: monthly_gains.map(g => g >= 0 ? '#28a745' : '#dc3545')
-                            }}]
-                        }},
-                        options: {{
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {{
-                                legend: {{ display: true }},
-                                title: {{ display: true, text: 'Monthly Performance' }}
-                            }},
-                            scales: {{ y: {{ beginAtZero: false }} }}
-                        }}
-                    }});
-                }}
-            }}
+                // Monthly Chart setup
+                if (window.monthlyData && window.monthlyData.length > 0 && !window.monthlyChartSetup) {
+                    const monthlyTabsDiv = document.getElementById('monthly-tabs');
+                    const years = [...new Set(window.monthlyData.map(d => d.year))].sort();
+                    if (years.length > 0 && monthlyTabsDiv) {
+                        years.forEach(year => {
+                            const btn = document.createElement('button');
+                            btn.className = 'tab';
+                            btn.textContent = year;
+                            btn.onclick = () => renderMonthlyChart(year);
+                            monthlyTabsDiv.appendChild(btn);
+                        });
+                        renderMonthlyChart(years[years.length - 1]);
+                        window.monthlyChartSetup = true;
+                    }
+                }
+            }
         </script>
     </body>
     </html>
@@ -1572,6 +1625,7 @@ def _generate_reports_html(report_data: Dict) -> str:
     # Prepare monthly data
     monthly_labels = [str(m.get('month', '')) for m in monthly if isinstance(m, dict)]
     monthly_gains = [float(m.get('gain_pct', 0.0) or 0.0) for m in monthly if isinstance(m, dict)]
+    monthly_data_json = json.dumps([m for m in monthly if isinstance(m, dict)])
     
     html = f"""
     <!DOCTYPE html>
@@ -1579,6 +1633,7 @@ def _generate_reports_html(report_data: Dict) -> str:
     <head>
         <title>SmartTrader - Performance Reports</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{ 
@@ -1957,9 +2012,13 @@ def _generate_reports_html(report_data: Dict) -> str:
             
             <!-- Monthly Analytics -->
             <div class="card">
-                <h2>📆 Monthly Analytics</h2>
+                <div style="display: flex; justify-content: flex-start; align-items: center; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px;">
+                    <h2 style="margin-bottom: 0; border-bottom: none; padding-right: 20px;">📆 Monthly Analytics</h2>
+                    <div class="tabs" style="border-bottom: none; margin-bottom: 0;" id="monthly-tabs-reports">
+                    </div>
+                </div>
                 <div class="chart-container">
-                    <canvas id="monthlyChart"></canvas>
+                    <canvas id="monthlyChartReports"></canvas>
                 </div>
             </div>
         </div>
@@ -2028,30 +2087,76 @@ def _generate_reports_html(report_data: Dict) -> str:
                 }}
             }});
             
-            // Monthly Chart
-            const monthlyCtx = document.getElementById('monthlyChart').getContext('2d');
-            new Chart(monthlyCtx, {{
-                type: 'bar',
-                data: {{
-                    labels: {json.dumps(monthly_labels)},
-                    datasets: [{{
-                        label: 'Monthly Gain %',
-                        data: {json.dumps(monthly_gains)},
-                        backgroundColor: monthly_gains.map(g => g >= 0 ? '#28a745' : '#dc3545')
-                    }}]
-                }},
-                options: {{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {{
-                        legend: {{ display: true }},
-                        title: {{ display: true, text: 'Monthly Performance' }}
-                    }},
-                    scales: {{
-                        y: {{ beginAtZero: false }}
-                    }}
+            // Monthly Data Global
+            window.monthlyDataReports = {monthly_data_json};
+            window.monthlyChartInstanceReports = null;
+
+            function renderMonthlyChartReports(year) {{
+                const yearData = window.monthlyDataReports.filter(d => d.year === String(year));
+                const labels = yearData.map(d => d.month);
+                const gains = yearData.map(d => parseFloat(d.gain_pct).toFixed(2));
+                const colors = ['#b388b8', '#e38484', '#61b3b1', '#fdb68b', '#b9d66f', '#77a4e6', '#c9c27f', '#d78ec5', '#8cd2b8', '#e3b26c', '#67a3a1', '#e88f8f'];
+                
+                const ctx = document.getElementById('monthlyChartReports').getContext('2d');
+                if (window.monthlyChartInstanceReports) {{
+                    window.monthlyChartInstanceReports.destroy();
                 }}
-            }});
+                
+                window.monthlyChartInstanceReports = new Chart(ctx, {{
+                    type: 'bar',
+                    data: {{
+                        labels: labels,
+                        datasets: [{{
+                            label: 'Monthly Gain(Change)',
+                            data: gains,
+                            backgroundColor: labels.map((l, i) => colors[i % colors.length])
+                        }}]
+                    }},
+                    plugins: [ChartDataLabels],
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {{
+                            legend: {{ display: false }},
+                            title: {{ display: true, text: 'Monthly Gain(Change)', font: {{ size: 16 }} }},
+                            datalabels: {{
+                                anchor: 'end',
+                                align: 'top',
+                                formatter: function(value) {{ return value + "%"; }},
+                                font: {{ weight: 'bold' }}
+                            }}
+                        }},
+                        scales: {{
+                            y: {{
+                                beginAtZero: true,
+                                ticks: {{ callback: function(value) {{ return value + "%" }} }},
+                                suggestedMax: Math.max(...gains.map(Number)) * 1.2
+                            }}
+                        }}
+                    }}
+                }});
+                
+                document.querySelectorAll('#monthly-tabs-reports .tab').forEach(t => {{
+                    if (t.textContent === String(year)) {{ t.classList.add('active'); }}
+                    else {{ t.classList.remove('active'); }}
+                }});
+            }}
+
+            // Setup tabs and render initial chart
+            if (window.monthlyDataReports && window.monthlyDataReports.length > 0) {{
+                const monthlyTabsDiv = document.getElementById('monthly-tabs-reports');
+                const years = [...new Set(window.monthlyDataReports.map(d => d.year))].sort();
+                if (years.length > 0 && monthlyTabsDiv) {{
+                    years.forEach(year => {{
+                        const btn = document.createElement('button');
+                        btn.className = 'tab';
+                        btn.textContent = year;
+                        btn.onclick = () => renderMonthlyChartReports(year);
+                        monthlyTabsDiv.appendChild(btn);
+                    }});
+                    renderMonthlyChartReports(years[years.length - 1]);
+                }}
+            }}
         </script>
     </body>
     </html>

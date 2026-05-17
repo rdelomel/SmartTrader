@@ -299,13 +299,20 @@ class TradingReporter:
         
         # Convert to list and calculate percentages
         monthly_list = []
+        # Calculate running equity by summing all trades before each month to get accurate starting equity
         for month_key in sorted(monthly_data.keys()):
             data = monthly_data[month_key]
-            # Calculate gain percentage (simplified - would need monthly starting equity)
-            gain_pct = 0.0  # Placeholder
+            
+            # Find starting equity for this month
+            month_start_date = datetime.strptime(month_key, '%Y-%m')
+            prior_profit = sum(t.get('pnl', 0) for t in closed_trades if self._parse_time(t.get('exit_time') or t.get('entry_time')) < month_start_date)
+            starting_equity = self.initial_equity + prior_profit
+            
+            gain_pct = (data['profit'] / starting_equity * 100) if starting_equity > 0 else 0.0
             
             monthly_list.append({
                 'month': data['month'],
+                'year': month_key[:4],  # Add year for grouping
                 'gain_pct': gain_pct,
                 'profit': data['profit'],
                 'trades': len(data['trades']),
