@@ -142,13 +142,12 @@ class DataStorage:
             
             print("Creating database engine...")
             # Choose connect args based on driver (pg8000 does not accept connect_timeout/options)
-            connect_args = {
-                "connect_timeout": 10,
-                "options": "-c statement_timeout=30000"  # 30 second statement timeout
-            }
-            if "+pg8000" in database_url:
-                # pg8000 uses different kwarg names; avoid passing unsupported ones
-                connect_args = {}
+            connect_args = {}
+            if database_url.startswith('postgresql') and '+pg8000' not in database_url:
+                connect_args = {
+                    "connect_timeout": 10,
+                    "options": "-c statement_timeout=30000"  # 30 second statement timeout
+                }
 
             # Use more conservative connection settings to avoid memory issues
             self.engine = create_engine(
