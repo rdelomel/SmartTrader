@@ -1,12 +1,13 @@
 # Railway deployment configuration for SmartTrader
 
 [build]
-builder = "nixpacks"
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python src/main.py"
+startCommand = "python run_agent.py"
 healthcheckPath = "/"
-healthcheckTimeout = 100
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
@@ -19,4 +20,3 @@ restartPolicyMaxRetries = 10
 # OPENROUTER_API_KEY
 # TRADING_MODE=paper
 # DATABASE_URL
-
