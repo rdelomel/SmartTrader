@@ -1,35 +1,62 @@
-# AI Model Configuration
+# ============================================================
+# SmartTrader AI Model Configuration v2
+# Updated: 2026-05-17
+# Changes from v1:
+#   - Fixed duplicate state_dim (20 and 25 in same block)
+#   - Disabled DRL until baseline strategy is profitable
+#   - Removed orphaned reward_weekly_bonus (weekly targets removed)
+#   - Reverted reward_gamma to 0.10 (was lowered to encourage overtading)
+#   - Rebalanced reward function — Sharpe bonus now primary
+#   - Increased DRL timesteps to 1M (200k is insufficient for PPO)
+#   - Removed is_weekend feature for forex (market closed = always 0)
+#   - Upgraded sentiment model to gpt-4o-mini for better signal quality
+#   - Minor: reduced XGBoost early_stopping_rounds 10→20 for stability
+# ============================================================
 
-# Deep Reinforcement Learning (DRL) Configuration
+# ============================================================
+# Deep Reinforcement Learning (DRL)
+# STATUS: DISABLED — re-enable at Stage 4 (see trading_config_v2 checklist)
+# Requires: Win rate > 52%, Sharpe > 1.5, 3 months consistent paper trading
+# ============================================================
 drl:
-  enabled: true  # Set to true to enable DRL-based trading
-  algorithm: ppo  # Options: 'ppo' or 'a2c'
-  state_dim: 20  # Dimension of state space
-  action_dim: 1  # Dimension of action space (continuous)
-  learning_rate: 0.0005  # Slightly higher for faster convergence
-  use_stable_baselines: true  # Use stable-baselines3 library
-  reward_alpha: 2.0  # Coefficient for PNL in reward function (increased from 1.0)
-  reward_beta: 8.0   # Coefficient for drawdown penalty (slightly reduced from 10.0, still strict)
-  reward_gamma: 0.05 # Coefficient for transaction costs (reduced from 0.1 to encourage more trades)
-  reward_weekly_bonus: 5.0  # Bonus for achieving weekly targets
-  reward_sharpe_bonus: 3.0  # Bonus for high Sharpe ratio
-  reward_momentum_bonus: 2.0  # Bonus for consecutive profitable periods
-  total_timesteps: 200000  # Total training timesteps (increased from 100000)
-  batch_size: 256  # Larger batches for stability
-  n_steps: 2048  # More steps per update
-  curriculum_learning: true  # Enable curriculum learning (start conservative, increase difficulty)
-  state_dim: 25  # Increased state dimension to accommodate new features (from 20)
+  enabled: false
+  algorithm: ppo                  # PPO preferred over A2C for financial environments
+  state_dim: 25                   # FIXED: was defined twice (20 and 25). Use 25.
+  action_dim: 1                   # Continuous action space for position sizing
+  learning_rate: 0.0003           # Reduced from 0.0005 — PPO is sensitive to LR
+  use_stable_baselines: true
 
+  # Reward function
+  # Goal: reward risk-adjusted returns, not raw PnL or frequency
+  reward_alpha: 2.0               # PnL coefficient
+  reward_beta: 8.0                # Drawdown penalty — keep strict
+  reward_gamma: 0.10              # Transaction cost penalty — REVERTED from 0.05
+                                  # Lower gamma was encouraging overtrading (wrong direction)
+  reward_sharpe_bonus: 5.0        # INCREASED from 3.0 — Sharpe is the primary quality signal
+  reward_momentum_bonus: 2.0      # Bonus for consecutive profitable periods
+  # reward_weekly_bonus REMOVED — weekly targets no longer exist in trading config
+
+  # Training
+  total_timesteps: 1000000        # INCREASED from 200k — PPO needs 1M+ to converge on financial data
+  batch_size: 256
+  n_steps: 2048
+  curriculum_learning: true       # Start conservative, increase difficulty progressively
+
+# ============================================================
 # Walk-Forward Optimization
+# Good practice — keep enabled for model validation
+# ============================================================
 walk_forward:
-  enabled: true  # Set to true to enable WFO
-  in_sample_days: 60  # Days for in-sample training
-  out_of_sample_days: 30  # Days for out-of-sample testing
-  step_days: 30  # Days to step forward each iteration
-  min_performance_threshold: 0.5  # Minimum Sharpe ratio to retrain
-  auto_retrain: true  # Automatically retrain when performance degrades
+  enabled: true
+  in_sample_days: 60
+  out_of_sample_days: 30
+  step_days: 30
+  min_performance_threshold: 0.5  # Minimum Sharpe to accept retrained model
+  auto_retrain: true
 
-# XGBoost Model
+# ============================================================
+# XGBoost — Primary ML Signal
+# ============================================================
 xgboost:
   n_estimators: 100
   max_depth: 6
@@ -37,17 +64,19 @@ xgboost:
   subsample: 0.8
   colsample_bytree: 0.8
   min_child_weight: 3
-  objective: binary:logistic  # For classification (up/down prediction)
+  objective: binary:logistic      # Directional prediction (up/down)
   eval_metric: logloss
-  early_stopping_rounds: 10
+  early_stopping_rounds: 20       # Increased from 10 — more stable convergence
 
-# LSTM Model
+# ============================================================
+# LSTM — Supporting Signal
+# ============================================================
 lstm:
-  sequence_length: 60  # Number of time steps to look back
-  features: 20  # Number of features per time step
-  lstm_units: [64, 32]  # LSTM layers with units
+  sequence_length: 60             # 60 x 1h bars = 2.5 days lookback
+  features: 20
+  lstm_units: [64, 32]
   dropout_rate: 0.2
-  dense_units: [16, 1]  # Dense layers before output
+  dense_units: [16, 1]
   activation: tanh
   optimizer: adam
   learning_rate: 0.001
@@ -55,43 +84,50 @@ lstm:
   epochs: 50
   validation_split: 0.2
 
+# ============================================================
 # Sentiment Analysis
+# ============================================================
 sentiment:
-  provider: openrouter  # Options: openrouter, openai, local_llm
-  model: openai/gpt-3.5-turbo  # For OpenRouter (can use any model: openai/gpt-4, anthropic/claude-3, etc.)
-  # model: gpt-3.5-turbo  # For direct OpenAI API
-  # model: llama-2-7b  # For local LLM
+  provider: openrouter
+  model: openai/gpt-4o-mini       # UPGRADED from gpt-3.5-turbo
+                                  # Significantly better financial sentiment accuracy
+                                  # Similar cost to gpt-3.5-turbo via OpenRouter
+  # Fallback options if cost becomes a concern:
+  # model: anthropic/claude-3-haiku  # Good quality, low cost
+  # model: openai/gpt-3.5-turbo      # Original — acceptable but weaker nuance
+
   max_tokens: 150
-  temperature: 0.3
+  temperature: 0.3                # Low temperature = consistent, factual outputs
+
   news_sources:
-    - cryptocompare  # CryptoCompare (free, no key needed for crypto) - PRIMARY
-    - reddit  # Reddit (free, no API key needed) - PRIMARY for sentiment
-    - newsapi  # NewsAPI (recommended - requires NEWSAPI_API_KEY)
-    - alphavantage  # Alpha Vantage (optional - requires ALPHA_VANTAGE_API_KEY)
-    - rss  # RSS feeds (fallback)
-  # News source configuration
-  newsapi_enabled: true  # Enable NewsAPI (requires NEWSAPI_API_KEY in .env)
-  alphavantage_enabled: false  # Enable Alpha Vantage news (requires ALPHA_VANTAGE_API_KEY)
-  cryptocompare_enabled: true  # Enable CryptoCompare (free, no key needed)
-  reddit_enabled: true  # Enable Reddit (free, no API key needed)
+    - cryptocompare               # Free, no key — primary for crypto
+    - reddit                      # Free, no key — good sentiment signal
+    - newsapi                     # Requires NEWSAPI_API_KEY — broad coverage
+    - rss                         # Fallback
+
+  newsapi_enabled: true
+  alphavantage_enabled: false     # Enable later if fundamental data needed
+  cryptocompare_enabled: true
+  reddit_enabled: true
+
   update_frequency_minutes: 15
-  cache_ttl_minutes: 15  # Cache news for 15 minutes per symbol to reduce API calls
-  sentiment_threshold: 0.3  # Minimum absolute sentiment to influence trading
-  # Enhanced RSS feeds with crypto-specific sources
+  cache_ttl_minutes: 15
+  sentiment_threshold: 0.35       # Aligned with trading_config_v2 (was 0.30)
+
   rss_feeds:
-    # General financial news
+    # General financial
     - https://feeds.finance.yahoo.com/rss/2.0/headline
     - https://www.cnbc.com/id/100003114/device/rss/rss.html
     - https://feeds.reuters.com/reuters/businessNews
-    - https://rss.cnn.com/rss/money_latest.rss
-    # Crypto-specific RSS feeds (more reliable)
+    # Crypto-specific
     - https://www.coindesk.com/arc/outboundfeeds/rss/
     - https://cointelegraph.com/rss
     - https://cryptoslate.com/feed/
-    - https://www.coinjournal.net/feed/
-    # Forex news
+    # Forex
     - https://www.forexfactory.com/rss.php
+
   max_articles_per_feed: 10
+
   keywords:
     - bitcoin
     - btc
@@ -107,20 +143,21 @@ sentiment:
     - dollar
     - euro
     - pound
-    - stock
     - market
     - trading
-    - invest
-    - finance
     - economy
 
-# Fundamental Data Sources
+# ============================================================
+# Fundamental Data
+# ============================================================
 fundamental:
-  alpha_vantage_enabled: false  # Set to true and add ALPHA_VANTAGE_API_KEY to .env
-  fred_enabled: false  # Set to true and add FRED_API_KEY to .env
+  alpha_vantage_enabled: false
+  fred_enabled: false
   fallback_to_yfinance: true
 
+# ============================================================
 # Feature Engineering
+# ============================================================
 features:
   technical_indicators:
     - rsi
@@ -130,37 +167,63 @@ features:
     - moving_averages
     - stochastic
     - adx
-  
+
   time_features:
     - hour_of_day
     - day_of_week
     - month
-    - is_weekend
-  
+    # REMOVED: is_weekend
+    # Forex market is closed on weekends — feature is always 0, pure noise.
+    # For crypto-only models, re-add conditionally.
+
   lag_features:
-    - price_lags: [1, 2, 3, 5, 10]
-    - volume_lags: [1, 2, 3, 5]
-  
+    price_lags: [1, 2, 3, 5, 10]
+    volume_lags: [1, 2, 3, 5]
+
   volatility_features:
     - rolling_std
     - rolling_high_low_range
     - price_change_percent
 
+# ============================================================
 # Model Training
+# ============================================================
 training:
   train_test_split: 0.8
   validation_split: 0.1
-  min_training_samples: 1000
+  min_training_samples: 1000      # ~42 days on 1h timeframe — reasonable minimum
   retrain_frequency_days: 7
   performance_window_days: 30
-  min_improvement_threshold: 0.02  # Minimum improvement to adopt new model
+  min_improvement_threshold: 0.02
 
+# ============================================================
 # Anomaly Detection
+# ============================================================
 anomaly_detection:
   model: isolation_forest
-  contamination: 0.05  # Reduced from 0.1 - less sensitive to normal market conditions
+  contamination: 0.05
   n_estimators: 100
   max_samples: 256
   random_state: 42
-  features: [price_change, volume_change, volatility]
+  features:
+    - price_change
+    - volume_change
+    - volatility
 
+# ============================================================
+# DRL RE-ENABLE CHECKLIST
+# Only re-enable DRL once ALL conditions are met:
+#
+#   [ ] Baseline strategy (trend + momentum) profitable for 3+ months
+#   [ ] Win rate > 52% sustained
+#   [ ] Sharpe ratio > 1.5 sustained
+#   [ ] Max drawdown staying under 3% consistently
+#   [ ] Broker sync fully stable (0 unmatched positions over 30 days)
+#   [ ] Data integrity score > 95% sustained
+#
+# When re-enabling:
+#   1. Set drl.enabled: true
+#   2. Run curriculum training first (conservative environment)
+#   3. Paper trade DRL signals in parallel (don't replace baseline immediately)
+#   4. Compare DRL vs baseline over 4 weeks before switching
+# ============================================================
