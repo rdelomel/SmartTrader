@@ -50,7 +50,7 @@ class VolatilityStrategy(BaseStrategy):
         current_price = data['close'].iloc[-1]
         
         # Calculate Bollinger Bands
-        bb = self.indicators.bollinger_bands(data, period=self.bb_period, std=self.bb_std)
+        bb = self.indicators.bollinger_bands(data, period=self.bb_period, std_dev=self.bb_std)
         bb_upper = bb['upper'].iloc[-1] if not bb.empty else current_price * 1.02
         bb_lower = bb['lower'].iloc[-1] if not bb.empty else current_price * 0.98
         bb_middle = bb['middle'].iloc[-1] if not bb.empty else current_price
@@ -148,7 +148,7 @@ class VolatilityStrategy(BaseStrategy):
         current_price = data['close'].iloc[-1]
         
         # Calculate Bollinger Bands
-        bb = self.indicators.bollinger_bands(data, period=self.bb_period, std=self.bb_std)
+        bb = self.indicators.bollinger_bands(data, period=self.bb_period, std_dev=self.bb_std)
         bb_upper = bb['upper'].iloc[-1] if not bb.empty else current_price * 1.02
         bb_lower = bb['lower'].iloc[-1] if not bb.empty else current_price * 0.98
         

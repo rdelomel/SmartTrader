@@ -2186,8 +2186,27 @@ class TradingAgent:
                                     print(f"❌ Failed to close position {symbol} via broker API (reason: {close_reason})")
                             except Exception as e:
                                 error_msg = str(e)
-                                print(f"❌ Error closing position {symbol} (reason: {close_reason}): {error_msg}")
-                                self.logger.log_error(e, {'symbol': symbol, 'action': 'close_position', 'reason': close_reason})
+                                print(f"[ERROR] Error closing position {symbol} (reason: {close_reason}): {error_msg}")
+                                # If the broker says 404 (position not found), it was already closed
+                                # externally - mark it as closed in DB immediately so we stop retrying.
+                                if '404' in error_msg or 'Not Found' in error_msg or 'not found' in error_msg.lower():
+                                    print(f"[INFO] 404 received for {symbol} - position already closed externally. Marking closed in DB.")
+                                    try:
+                                        if side == 'buy':
+                                            final_pnl = (current_price - entry_price) * quantity
+                                        else:
+                                            final_pnl = (entry_price - current_price) * quantity
+                                        self.storage.update_trade(trade_id, {
+                                            'status': 'closed',
+                                            'exit_price': current_price,
+                                            'exit_time': datetime.now(),
+                                            'pnl': final_pnl
+                                        })
+                                        print(f"[SUCCESS] Marked {symbol} as closed in database (P&L: ${final_pnl:.2f})")
+                                    except Exception as db_error:
+                                        print(f"[ERROR] Failed to update database for {symbol}: {db_error}")
+                                else:
+                                    self.logger.log_error(e, {'symbol': symbol, 'action': 'close_position', 'reason': close_reason})
                         else:
                             print(f"⚠️  No broker found to close position {symbol} (reason: {close_reason})")
                     

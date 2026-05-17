@@ -59,7 +59,7 @@ class MomentumStrategy(BaseStrategy):
         rsi_prev = rsi.iloc[-2] if len(rsi) > 1 else rsi_current
         
         # Calculate MACD
-        macd_data = self.indicators.macd(data, fast=self.macd_fast, slow=self.macd_slow, signal=self.macd_signal)
+        macd_data = self.indicators.macd(data, fast_period=self.macd_fast, slow_period=self.macd_slow, signal_period=self.macd_signal)
         macd_line = macd_data['macd'].iloc[-1] if 'macd' in macd_data.columns else 0
         macd_signal_line = macd_data['signal'].iloc[-1] if 'signal' in macd_data.columns else 0
         macd_histogram = macd_data['histogram'].iloc[-1] if 'histogram' in macd_data.columns else 0
@@ -139,7 +139,7 @@ class MomentumStrategy(BaseStrategy):
         rsi_current = rsi.iloc[-1] if not rsi.empty else 50
         
         # Calculate MACD
-        macd_data = self.indicators.macd(data, fast=self.macd_fast, slow=self.macd_slow, signal=self.macd_signal)
+        macd_data = self.indicators.macd(data, fast_period=self.macd_fast, slow_period=self.macd_slow, signal_period=self.macd_signal)
         macd_histogram = macd_data['histogram'].iloc[-1] if 'histogram' in macd_data.columns else 0
         
         # Exit long if momentum reverses
