@@ -64,10 +64,10 @@ class CircuitBreaker:
                 self._cached_equity_timestamp = timestamp
             return {'triggered': False, 'reason': f'Using {data_source} data, API unavailable'}
         
-        # CRITICAL: Validate large equity changes (>50%) - might be calculation error
+        # CRITICAL: Validate large equity changes (>70%) - might be calculation error or cross-broker confusion
         if self._cached_equity is not None and self._cached_equity > 0:
             equity_change_pct = abs(equity - self._cached_equity) / self._cached_equity * 100
-            if equity_change_pct > 50.0:
+            if equity_change_pct > 70.0:
                 print(f"  ⚠️  WARNING: Large equity change detected: {equity_change_pct:.1f}% ({self._cached_equity:.2f} -> {equity:.2f})")
                 if verify_with_broker:
                     print(f"     This may be a calculation error - verify with broker before triggering circuit breaker")
@@ -92,27 +92,40 @@ class CircuitBreaker:
                 if avg_recent_equity > 0:
                     equity_ratio = max(equity, avg_recent_equity) / min(equity, avg_recent_equity)
                     
-                    # If equity DROPS significantly (>30%), check if it's a real drawdown
-                    if equity < avg_recent_equity * 0.7:  # 30% drop
-                        # Check if this is recent (within last hour) - likely real drawdown
-                        recent_times = [e[0] for e in recent_entries[-5:]]
-                        if recent_times:
-                            time_diff = (timestamp - recent_times[-1]).total_seconds() / 3600
-                            if time_diff < 1.0:  # Within last hour
-                                # Real drawdown - trigger circuit breaker, don't clear history
-                                drop_pct = ((avg_recent_equity - equity) / avg_recent_equity * 100)
-                                print(f"Circuit Breaker: CRITICAL - Equity dropped {drop_pct:.1f}% in {time_diff:.1f} hours")
-                                self.triggered = True
-                                self.triggered_at = timestamp
-                                self.trigger_reason = f"Critical equity drop: {drop_pct:.1f}% in {time_diff:.1f} hours"
-                                # Still add to history for tracking, but don't continue normal processing
-                                self.equity_history.append((timestamp, equity))
-                                return  # Don't continue with normal history update
+                    # If equity DROPS significantly (>40%), check if it's a real drawdown.
+                    # NOTE: Using 40% (not 30%) to avoid false-positives when a per-broker CB
+                    # was previously seeded with the aggregate multi-broker balance.
+                    if equity < avg_recent_equity * 0.60:  # 40% drop
+                        # Cross-validate: if history has fewer than 5 entries, this might be
+                        # the first run after a CB was reset – skip to avoid false trigger.
+                        if len(recent_entries) < 5:
+                            # Not enough history to be confident – treat as stale, clear and continue
+                            self.equity_history.clear()
+                            self.equity_history.append((timestamp, equity))
+                            # Reset peak equity too so it doesn't cause a stale drawdown
+                            self.peak_equity = equity
+                            self.peak_equity_time = timestamp
+                        else:
+                            # Check if this is recent (within last hour) - likely real drawdown
+                            recent_times = [e[0] for e in recent_entries[-5:]]
+                            if recent_times:
+                                time_diff = (timestamp - recent_times[-1]).total_seconds() / 3600
+                                if time_diff < 1.0:  # Within last hour
+                                    # Real drawdown - trigger circuit breaker, don't clear history
+                                    drop_pct = ((avg_recent_equity - equity) / avg_recent_equity * 100)
+                                    print(f"Circuit Breaker: CRITICAL - Equity dropped {drop_pct:.1f}% in {time_diff:.1f} hours")
+                                    self.triggered = True
+                                    self.triggered_at = timestamp
+                                    self.trigger_reason = f"Critical equity drop: {drop_pct:.1f}% in {time_diff:.1f} hours"
+                                    # Still add to history for tracking, but don't continue normal processing
+                                    self.equity_history.append((timestamp, equity))
+                                    return  # Don't continue with normal history update
                     
-                    # Check for immediate drop >20% in single update (very recent)
+                    # Check for immediate drop >35% in single update (very recent)
+                    # Using 35% threshold (not 20%) to avoid false positives from broker data mismatches.
                     if len(recent_entries) >= 2:
                         last_equity = recent_entries[-1][1]
-                        if equity < last_equity * 0.8:  # 20% drop from last update
+                        if equity < last_equity * 0.65:  # 35% drop from last update
                             time_diff = (timestamp - recent_entries[-1][0]).total_seconds() / 60  # minutes
                             if time_diff < 60:  # Within last hour
                                 drop_pct = ((last_equity - equity) / last_equity * 100)

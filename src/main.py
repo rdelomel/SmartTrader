@@ -805,7 +805,7 @@ class TradingAgent:
             self._cleanup_phantom_trades()
             
             open_trades = self.storage.get_open_trades() if self.storage else []
-            print(f"✅ Startup sync complete: Found {len(open_trades)} open positions in database")
+            print(f"[SUCCESS] Startup sync complete: Found {len(open_trades)} open positions in database")
             if open_trades:
                 positions_list = [f"{t.get('symbol')} {t.get('side')}" for t in open_trades]
                 print(f"  Positions to manage: {positions_list}")
@@ -813,7 +813,7 @@ class TradingAgent:
             # Calculate and update take profit for existing positions that don't have it
             self._update_missing_take_profits(open_trades)
         except Exception as e:
-            print(f"⚠️  Warning: Error during startup sync: {e}")
+            print(f"[WARNING] Error during startup sync: {e}")
             self.logger.log_error(e, {'component': 'startup_sync'})
         
         # Main loop
@@ -935,7 +935,7 @@ class TradingAgent:
                         broker = self.brokers.get(broker_key) or self.brokers.get(broker_name) or self.brokers.get(asset_class)
                     
                     if not broker:
-                        print(f"  ⚠️  No broker available for {asset_class}")
+                        print(f"  [WARNING] No broker available for {asset_class}")
                         continue
                     
                     print(f"  ✓ Broker found: {type(broker).__name__}")
@@ -1289,11 +1289,19 @@ class TradingAgent:
                     
                     # Update per-broker circuit breaker with API status
                     if broker_name in self.circuit_breakers:
-                        self.circuit_breakers[broker_name].update_equity(
+                        cb_broker = self.circuit_breakers[broker_name]
+                        cb_broker.update_equity(
                             total_bal,
                             api_available=api_available,
                             data_source=data_source
                         )
+                        # Initialize peak equity on first update for this broker
+                        if cb_broker.peak_equity is None:
+                            cb_broker.reset_peak_equity(total_bal)
+                            print(f"  Circuit Breaker [{broker_name}]: Initialized peak equity to ${total_bal:,.2f}")
+                        elif cb_broker.peak_equity > 0 and abs(cb_broker.peak_equity - total_bal) / cb_broker.peak_equity > 0.7:
+                            print(f"  Circuit Breaker [{broker_name}]: Peak (${cb_broker.peak_equity:,.2f}) differs >70% from current (${total_bal:,.2f}). Resetting...")
+                            cb_broker.reset_peak_equity(total_bal)
                     
                     # Update per-broker performance tracker
                     if broker_name in self.performance_trackers and self.performance_trackers[broker_name]:
@@ -1352,19 +1360,13 @@ class TradingAgent:
                     print(f"  Circuit Breaker: Peak equity (${cb.peak_equity:,.2f}) differs significantly from current (${account_balance:,.2f}). Resetting...")
                     cb.reset_peak_equity(account_balance)
             
-            # Also update per-broker circuit breakers
+            # Also sync stale-state check for per-broker circuit breakers
+            # NOTE: equity already updated above in the broker balance loop - only check stale state here
             for broker_name, cb in self.circuit_breakers.items():
                 if cb:
-                    # Check and reset stale state before updating
-                    broker_balance = broker_balance_info.get(broker_name, {}).get('total', account_balance)
-                    cb.check_and_reset_stale_state(broker_balance, datetime.now())
-                    
-                    cb.update_equity(broker_balance)
-                    # Initialize peak equity if not set
-                    if cb.peak_equity is None:
-                        cb.reset_peak_equity(broker_balance)
-                    elif cb.peak_equity > 0 and abs(cb.peak_equity - broker_balance) / cb.peak_equity > 0.5:
-                        cb.reset_peak_equity(broker_balance)
+                    broker_balance = broker_balance_info.get(broker_name, {}).get('total', 0.0)
+                    if broker_balance > 0:
+                        cb.check_and_reset_stale_state(broker_balance, datetime.now())
             
             # Use position size from orchestrator (already calculated with regime adjustments)
             position_info = decision.get('position_size', {})
@@ -2844,7 +2846,7 @@ class TradingAgent:
             
             # Handle phantom trades
             if phantom_trades:
-                print(f"  ⚠️  Found {len(phantom_trades)} phantom trade(s) (not found in any broker):")
+                print(f"  [WARNING] Found {len(phantom_trades)} phantom trade(s) (not found in any broker):")
                 for trade in phantom_trades:
                     symbol = trade.get('symbol')
                     side = trade.get('side')
