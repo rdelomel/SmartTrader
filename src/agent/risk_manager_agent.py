@@ -45,6 +45,11 @@ class RiskManagerAgent(BaseAgent):
         self.max_drawdown_percent = self.config.get('max_drawdown_percent', 10.0)
         self.min_liquidity_ratio = self.config.get('min_liquidity_ratio', 0.1)  # 10% of order size
         self.max_slippage_bps = self.config.get('max_slippage_bps', 10)  # 10 basis points
+
+        # Performance state defaults (used by dynamic position sizing)
+        # Prevents attribute errors before first performance update cycle.
+        self.recent_sharpe = 1.0
+        self.recent_win_rate = 50.0
     
     def analyze(self, symbol: str, data: pd.DataFrame, account_balance: float, 
                 proposed_signal=None, proposed_position_size: float = 0.0) -> Dict:
@@ -450,4 +455,3 @@ class RiskManagerAgent(BaseAgent):
             status['drawdown'] = self.drawdown_manager.get_status()
         
         return status
-

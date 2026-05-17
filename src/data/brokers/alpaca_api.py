@@ -333,14 +333,19 @@ class AlpacaBroker(BaseBroker):
                     raise ValueError("Price required for LIMIT orders")
                 order_data['limit_price'] = str(price)
             
+            sl_submitted = False
+            tp_submitted = False
+
             # Alpaca doesn't support bracket orders (stop-loss/take-profit) for crypto
             # These need to be handled separately by the trading system
             if not is_crypto:
                 # Only add stop_loss/take_profit for stocks
                 if stop_loss:
                     order_data['stop_loss'] = {'stop_price': str(stop_loss)}
+                    sl_submitted = True
                 if take_profit:
                     order_data['take_profit'] = {'limit_price': str(take_profit)}
+                    tp_submitted = True
             else:
                 # For crypto, log that stop_loss/take_profit will be handled separately
                 if stop_loss or take_profit:
@@ -415,7 +420,12 @@ class AlpacaBroker(BaseBroker):
                 'symbol': symbol,
                 'side': side.value,
                 'price': final_price,
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(),
+                'stop_loss_requested': bool(stop_loss),
+                'take_profit_requested': bool(take_profit),
+                'stop_loss_submitted': sl_submitted,
+                'take_profit_submitted': tp_submitted,
+                'bracket_supported': not is_crypto
             }
             
             print(f"  ✅ Order placed successfully: {result}")

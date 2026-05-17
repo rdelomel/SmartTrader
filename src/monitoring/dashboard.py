@@ -45,35 +45,232 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     
     # Initialize reporter
     reporter = TradingReporter(storage) if storage else None
+
+    def _normalize_symbol(symbol: Optional[str]) -> str:
+        if not symbol:
+            return ''
+        return str(symbol).replace('_', '/').replace('-', '/').upper()
+
+    def _symbols_match(a: Optional[str], b: Optional[str]) -> bool:
+        na = _normalize_symbol(a).replace('/', '')
+        nb = _normalize_symbol(b).replace('/', '')
+        return bool(na and nb and na == nb)
+
+    def _collect_broker_open_positions() -> List[Dict]:
+        positions: List[Dict] = []
+        if not app.brokers:
+            return positions
+        for broker_name, broker in app.brokers.items():
+            try:
+                for pos in broker.get_open_positions() or []:
+                    positions.append({
+                        'broker': broker_name,
+                        'symbol': _normalize_symbol(pos.get('symbol', '')),
+                        'side': str(pos.get('side', 'buy')).lower(),
+                        'raw': pos
+                    })
+            except Exception as e:
+                print(f"Error collecting positions from broker {broker_name}: {e}")
+        return positions
+
+    def _build_trusted_dashboard_snapshot() -> Dict:
+        """Build a broker-reconciled, reporting-backed dashboard snapshot."""
+
+        def _normalize_trade(trade: Dict) -> Dict:
+            quantity = trade.get('quantity') or trade.get('filled_qty') or 0.0
+            entry_price = trade.get('entry_price') or trade.get('price') or 0.0
+            exit_price = trade.get('exit_price') or trade.get('price') or entry_price
+            status = (trade.get('status') or '').lower()
+            display_price = exit_price if status == 'closed' else entry_price
+            return {
+                'trade_id': trade.get('trade_id') or trade.get('order_id') or '',
+                'symbol': trade.get('symbol', ''),
+                'side': trade.get('side', ''),
+                'quantity': float(quantity or 0.0),
+                'price': float(display_price or 0.0),
+                'pnl': float(trade.get('pnl', 0.0) or 0.0),
+                'time': trade.get('exit_time') or trade.get('entry_time') or datetime.now().isoformat(),
+                'status': status,
+                'entry_price': float(entry_price or 0.0),
+                'exit_price': float(exit_price or 0.0)
+            }
+
+        all_trades = app.storage.get_all_trades(limit=1000) if (app.storage and hasattr(app.storage, 'get_all_trades')) else []
+        local_open = app.storage.get_open_trades() if (app.storage and hasattr(app.storage, 'get_open_trades')) else []
+        closed_trades = [t for t in all_trades if t.get('status') == 'closed']
+        broker_open = _collect_broker_open_positions()
+
+        # Refresh balance from brokers if possible; fallback to cached value.
+        total_balance = 0.0
+        if app.brokers:
+            for broker in app.brokers.values():
+                try:
+                    balance_info = broker.get_account_balance()
+                    total_balance += float(balance_info.get('total', 0.0) or 0.0)
+                except Exception:
+                    pass
+        if total_balance <= 0:
+            total_balance = float(dashboard_data.get('balance', 0.0) or 0.0)
+
+        # Build broker-verified position view from local open trades.
+        positions = []
+        matched_count = 0
+        stale_local = []
+        for t in local_open:
+            t_symbol = _normalize_symbol(t.get('symbol'))
+            t_side = str(t.get('side', 'buy')).lower()
+            broker_match = next(
+                (p for p in broker_open if _symbols_match(p.get('symbol'), t_symbol) and p.get('side') == t_side),
+                None
+            )
+            verified = broker_match is not None
+            if verified:
+                matched_count += 1
+            else:
+                stale_local.append({'trade_id': t.get('trade_id'), 'symbol': t.get('symbol'), 'side': t.get('side')})
+
+            entry_price = float(t.get('entry_price', 0.0) or 0.0)
+            current_price = entry_price
+            if broker_match:
+                raw = broker_match.get('raw', {})
+                current_price = float(raw.get('current_price', raw.get('market_price', entry_price)) or entry_price)
+
+            quantity = float(t.get('quantity', 0.0) or 0.0)
+            pnl = float(t.get('pnl', 0.0) or 0.0)
+            if entry_price > 0 and current_price > 0 and quantity > 0:
+                pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
+
+            positions.append({
+                'trade_id': t.get('trade_id'),
+                'symbol': t.get('symbol'),
+                'side': t.get('side', 'buy'),
+                'quantity': quantity,
+                'entry_price': entry_price,
+                'current_price': current_price,
+                'pnl': pnl,
+                'strategy': t.get('strategy', 'smarttrader'),
+                'verified_at_broker': verified,
+                'broker': broker_match.get('broker') if broker_match else None
+            })
+
+        broker_only = []
+        for p in broker_open:
+            exists = any(_symbols_match(t.get('symbol'), p.get('symbol')) and str(t.get('side', 'buy')).lower() == p.get('side') for t in local_open)
+            if not exists:
+                broker_only.append({'broker': p.get('broker'), 'symbol': p.get('symbol'), 'side': p.get('side')})
+
+        report_data = reporter.generate_report() if reporter else None
+        general = report_data.get('general', {}) if report_data else {}
+        advanced = report_data.get('advanced', {}) if report_data else {}
+        periods = report_data.get('periods', {}) if report_data else {}
+        monthly = report_data.get('monthly_analytics', []) if report_data else []
+        equity_curve = report_data.get('equity_curve', []) if report_data else []
+
+        realized_pnl = float(general.get('net_profit', sum((t.get('pnl', 0) or 0) for t in closed_trades)) or 0.0)
+        unrealized_pnl = float(sum((p.get('pnl', 0) or 0) for p in positions) or 0.0)
+        equity = total_balance + unrealized_pnl
+        initial_eq = float((reporter.initial_equity if reporter else 10000.0) or 10000.0)
+        total_return = ((equity - initial_eq) / initial_eq * 100) if initial_eq > 0 else 0.0
+
+        peak_equity = max([point.get('equity', 0.0) for point in equity_curve], default=initial_eq)
+        current_drawdown = max(0.0, min(100.0, ((peak_equity - equity) / peak_equity * 100))) if peak_equity > 0 else 0.0
+
+        local_open_count = len(local_open)
+        broker_open_count = len(broker_open)
+        stale_local_count = len(stale_local)
+        broker_only_count = len(broker_only)
+        mismatch_total = stale_local_count + broker_only_count
+        denom = max(local_open_count + broker_open_count, 1)
+        integrity_score = max(0.0, 100.0 - (mismatch_total / denom) * 100.0)
+
+        normalized_recent_trades = [_normalize_trade(t) for t in sorted(
+            all_trades,
+            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+            reverse=True
+        )[:50]]
+
+        return {
+            'equity': float(equity),
+            'balance': float(total_balance),
+            'positions': positions,
+            'trades': normalized_recent_trades,
+            'performance': {
+                'total_return': float(total_return),
+                'realized_pnl': float(realized_pnl),
+                'unrealized_pnl': float(unrealized_pnl),
+                'total_trades': int(general.get('total_trades', len(closed_trades)) or 0),
+                'win_rate': float(general.get('win_rate', 0.0) or 0.0),
+                'loss_rate': float(general.get('loss_rate', 0.0) or 0.0),
+                'sharpe_ratio': float(advanced.get('sharpe_ratio', 0.0) or 0.0),
+                'sortino_ratio': float(advanced.get('sortino_ratio', 0.0) or 0.0),
+                'profit_factor': float(general.get('profit_factor', 0.0) or 0.0),
+                'expectancy': float(advanced.get('expectancy', 0.0) or 0.0),
+                'average_trade': float(advanced.get('average_trade', 0.0) or 0.0),
+                'initial_equity': float(initial_eq)
+            },
+            'risk_metrics': {
+                'drawdown_percent': float(current_drawdown),
+                'peak_equity': float(peak_equity),
+                'current_equity': float(equity),
+                'max_drawdown_percent': float(advanced.get('max_drawdown', 0.0) or 0.0),
+                'standard_deviation': float(advanced.get('standard_deviation', 0.0) or 0.0)
+            },
+            'data_quality': {
+                'integrity_score': float(integrity_score),
+                'matched_open_trades': int(matched_count),
+                'local_open_count': int(local_open_count),
+                'broker_open_count': int(broker_open_count),
+                'stale_local_count': int(stale_local_count),
+                'broker_only_count': int(broker_only_count),
+                'stale_local_trades': stale_local,
+                'broker_only_positions': broker_only,
+                'last_reconciled_at': datetime.now().isoformat()
+            },
+            'report': {
+                'general': general,
+                'periods': periods,
+                'advanced': advanced,
+                'equity_curve': equity_curve[-300:],
+                'monthly_analytics': monthly[-36:]
+            }
+        }
+
     
     @app.get("/")
     async def get_dashboard():
         """Serve unified dashboard HTML with tabs"""
-        # Try to load initial data from database if dashboard is empty
-        if (dashboard_data.get('equity', 0) == 10000.0 and 
-            dashboard_data.get('balance', 0) == 10000.0 and 
-            len(dashboard_data.get('positions', [])) == 0 and
-            storage):
-            try:
-                # Load initial data from database
-                open_trades = storage.get_open_trades()
-                if open_trades or (hasattr(storage, 'get_all_trades') and storage.get_all_trades(limit=1)):
-                    # We have data, trigger a load
-                    # This will be handled by the /api/dashboard endpoint when called
+        try:
+            # Try to load initial data from database if dashboard is empty
+            if (dashboard_data.get('equity', 0) == 10000.0 and
+                dashboard_data.get('balance', 0) == 10000.0 and
+                len(dashboard_data.get('positions', [])) == 0 and
+                storage):
+                try:
+                    open_trades = storage.get_open_trades()
+                    if open_trades or (hasattr(storage, 'get_all_trades') and storage.get_all_trades(limit=1)):
+                        pass
+                except Exception:
                     pass
-            except:
-                pass
-        
-        # Get report data if available
-        report_data = None
-        if reporter:
-            try:
-                report_data = reporter.generate_report()
-            except:
-                pass
-        
-        html = _generate_unified_dashboard_html(report_data)
-        return HTMLResponse(content=html)
+
+            report_data = None
+            if reporter:
+                try:
+                    report_data = reporter.generate_report()
+                except Exception:
+                    report_data = None
+
+            html = _generate_unified_dashboard_html(report_data)
+            return HTMLResponse(content=html)
+        except Exception as e:
+            # Never break root dashboard endpoint; render minimal fallback instead.
+            fallback_html = f"""
+            <html><body style='font-family:Arial;padding:20px'>
+              <h1>SmartTrader Dashboard</h1>
+              <p>Dashboard rendering fallback active.</p>
+              <p>Error: {str(e)}</p>
+            </body></html>
+            """
+            return HTMLResponse(content=fallback_html, status_code=200)
     
     @app.get("/dashboard-old")
     async def get_old_dashboard():
@@ -280,7 +477,7 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                             <td>$${pos.current_price || pos.entry_price}</td>
                             <td class="${pos.pnl >= 0 ? 'positive' : 'negative'}">$${pos.pnl.toFixed(2)}</td>
                             <td>
-                                <button class="btn-close" onclick="closePosition('${pos.trade_id}', '${pos.symbol}', '${pos.side}')" title="${buttonTitle}">
+                                <button class="btn-close" onclick="closePosition('${pos.trade_id || pos.symbol.replace('/', '_')}', '${pos.symbol}', '${pos.side}')" title="${buttonTitle}">
                                     ${buttonText}
                                 </button>
                             </td>
@@ -318,164 +515,135 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     
     @app.get("/api/dashboard")
     async def get_dashboard_api():
-        """Get dashboard data as JSON - with fallback to load from database if empty"""
-        # If dashboard data is still default/empty, try to load from database
-        if (dashboard_data.get('equity', 0) == 10000.0 and 
-            dashboard_data.get('balance', 0) == 10000.0 and 
-            len(dashboard_data.get('positions', [])) == 0 and
-            len(dashboard_data.get('trades', [])) == 0 and
-            app.storage):
-            # Try to load data from database
-            try:
-                # Get open trades
-                open_trades = app.storage.get_open_trades()
-                positions = []
-                for trade in open_trades:
-                    positions.append({
-                        'symbol': trade.get('symbol'),
-                        'side': trade.get('side', 'buy'),
-                        'quantity': trade.get('quantity', 0),
-                        'entry_price': trade.get('entry_price', 0),
-                        'current_price': trade.get('entry_price', 0),  # Fallback
-                        'pnl': trade.get('pnl', 0),
-                        'trade_id': trade.get('trade_id')
-                    })
-                
-                # Get recent closed trades
-                all_trades = app.storage.get_all_trades(limit=50) if hasattr(app.storage, 'get_all_trades') else []
-                closed_trades = [t for t in all_trades if t.get('status') == 'closed']
-                
-                # Calculate totals
-                total_balance = 0.0
-                if app.brokers:
-                    for broker in app.brokers.values():
-                        try:
-                            balance_info = broker.get_account_balance()
-                            total_balance += balance_info.get('total', 0.0)
-                        except:
-                            pass
-                
-                # Calculate realized P&L from closed trades
-                realized_pnl = sum(t.get('pnl', 0) for t in closed_trades)
-                
-                # Get initial equity (try to get from reporter, or use balance as fallback)
-                initial_equity = 10000.0  # Default
-                if reporter and hasattr(reporter, 'initial_equity'):
-                    initial_equity = reporter.initial_equity
-                if not initial_equity or initial_equity == 0:
-                    initial_equity = total_balance if total_balance > 0 else 10000.0
-                
-                # Calculate equity (balance + unrealized P&L)
-                unrealized_pnl = sum(p.get('pnl', 0) for p in positions)
-                equity = total_balance + unrealized_pnl
-                
-                # Calculate total return
-                total_return = ((equity - initial_equity) / initial_equity * 100) if initial_equity > 0 else 0.0
-                
-                # Calculate win/loss rates
-                winning_trades = [t for t in closed_trades if t.get('pnl', 0) > 0]
-                losing_trades = [t for t in closed_trades if t.get('pnl', 0) < 0]
-                win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0.0
-                loss_rate = (len(losing_trades) / len(closed_trades) * 100) if closed_trades else 0.0
-                
-                # Update dashboard data with loaded information
-                dashboard_data.update({
-                    'equity': equity,
-                    'balance': total_balance,
-                    'positions': positions,
-                    'trades': closed_trades[-10:],  # Last 10 closed trades
-                    'performance': {
-                        'total_return': total_return,
-                        'realized_pnl': realized_pnl,
-                        'unrealized_pnl': unrealized_pnl,
-                        'total_trades': len(closed_trades),
-                        'win_rate': win_rate,
-                        'loss_rate': loss_rate,
-                        'sharpe_ratio': 0.0,
-                        'initial_equity': initial_equity
-                    }
-                })
-            except Exception as e:
-                print(f"Error loading dashboard data from database: {e}")
-                import traceback
-                traceback.print_exc()
-        
+        """Get trusted dashboard data as JSON, reconciled with broker positions."""
+        try:
+            snapshot = _build_trusted_dashboard_snapshot()
+            dashboard_data.update(snapshot)
+        except Exception as e:
+            print(f"Error loading dashboard data from database: {e}")
+
         return _serialize_datetime(dashboard_data)
-    
+
+    @app.get("/api/reconcile_open_trades")
+    async def reconcile_open_trades():
+        """Reconcile local open trades with broker open positions."""
+        if not app.storage:
+            return {
+                'success': False,
+                'error': 'Storage not available',
+                'stale_local_trades': [],
+                'broker_only_positions': []
+            }
+
+        snapshot = _build_trusted_dashboard_snapshot()
+        dq = snapshot.get('data_quality', {})
+        return {
+            'success': True,
+            'local_open_count': dq.get('local_open_count', 0),
+            'broker_open_count': dq.get('broker_open_count', 0),
+            'matched_open_trades': dq.get('matched_open_trades', 0),
+            'integrity_score': dq.get('integrity_score', 0.0),
+            'stale_local_trades': dq.get('stale_local_trades', []),
+            'broker_only_positions': dq.get('broker_only_positions', []),
+            'last_reconciled_at': dq.get('last_reconciled_at')
+        }
+
+    @app.get("/api/report")
+    async def get_report_api():
+        """Return report payload used by MyFxBook-style analytics tabs."""
+        snapshot = _build_trusted_dashboard_snapshot()
+        return _serialize_datetime({
+            'success': True,
+            'report': snapshot.get('report', {}),
+            'performance': snapshot.get('performance', {}),
+            'risk_metrics': snapshot.get('risk_metrics', {}),
+            'data_quality': snapshot.get('data_quality', {})
+        })
+
     @app.post("/api/close_position/{trade_id}")
     async def close_position(trade_id: str):
         """
-        Close/delete a position by trade_id
+        Close/delete a position by trade identifier.
         - If position exists in broker (Alpaca/OANDA), close it via API
         - If position is phantom (local only), delete from database
+        - If trade_id is missing, supports symbol-based fallback
         """
         if not app.storage:
             return {"success": False, "error": "Storage not available"}
-        
+
         try:
-            # Get the trade to check if it exists
-            open_trades = app.storage.get_open_trades()
-            trade = next((t for t in open_trades if t.get('trade_id') == trade_id), None)
+            open_trades = app.storage.get_open_trades() if hasattr(app.storage, 'get_open_trades') else []
+            all_trades = app.storage.get_all_trades(limit=500) if hasattr(app.storage, 'get_all_trades') else []
 
-            # Fallback: also search all trades (some synced trades may not be marked open)
+            trade = None
+            normalized_input = _normalize_symbol(trade_id)
+
+            # 1) Primary lookup by trade/order id
+            if trade_id:
+                trade = next((t for t in open_trades if str(t.get('trade_id', '')) == str(trade_id)), None)
+                if not trade:
+                    trade = next(
+                        (t for t in all_trades if str(t.get('trade_id', '')) == str(trade_id) or str(t.get('order_id', '')) == str(trade_id)),
+                        None,
+                    )
+
+            # 2) Fallback lookup by symbol when UI had no trade_id
+            if not trade and normalized_input:
+                symbol_matches = [
+                    t for t in open_trades
+                    if _symbols_match(t.get('symbol'), normalized_input)
+                ]
+                if symbol_matches:
+                    trade = symbol_matches[0]
+
+            # 3) If still missing, attempt reconciliation and close directly from broker positions by symbol
             if not trade:
-                all_trades = app.storage.get_all_trades(limit=500) if hasattr(app.storage, "get_all_trades") else []
-                trade = next(
-                    (
-                        t
-                        for t in all_trades
-                        if t.get("trade_id") == trade_id or t.get("order_id") == trade_id
-                    ),
-                    None,
-                )
-
-            if not trade:
-                # As a last resort, try to treat trade_id as a symbol (UI may send symbol when trade_id missing)
-                symbol_guess = trade_id if "/" in trade_id else None
-                side_guess = "buy"
-                strategy_guess = ""
-
+                broker_positions = _collect_broker_open_positions()
+                symbol_guess = normalized_input if normalized_input else None
                 if symbol_guess:
-                    trade = {"trade_id": trade_id, "symbol": symbol_guess, "side": side_guess, "strategy": strategy_guess}
-                else:
-                    return {"success": False, "error": "Trade not found"}
-            
+                    broker_match = next((p for p in broker_positions if _symbols_match(p.get('symbol'), symbol_guess)), None)
+                    if broker_match:
+                        # Build synthetic trade shape so close flow can continue.
+                        trade = {
+                            'trade_id': trade_id or symbol_guess,
+                            'symbol': symbol_guess,
+                            'side': broker_match.get('side', 'buy'),
+                            'strategy': f"{broker_match.get('broker', '')}_sync"
+                        }
+
+            if not trade:
+                return {
+                    "success": False,
+                    "error": "Trade not found",
+                    "hint": "Run /api/reconcile_open_trades to inspect local/broker mismatches"
+                }
+
             symbol = trade.get('symbol')
-            side = trade.get('side', 'buy')
-            strategy = trade.get('strategy') or ''  # Handle None case
-            
+            side = str(trade.get('side', 'buy')).lower()
+            strategy = trade.get('strategy') or ''
+
             # Check if position exists in any broker
             position_found_in_broker = False
             broker_used = None
-            
-            # First, try to identify broker from strategy field
+
             if strategy and '_sync' in strategy:
                 broker_name = strategy.replace('_sync', '')
                 broker = app.brokers.get(broker_name)
                 if broker:
                     try:
-                        broker_positions = broker.get_open_positions()
-                        # Check if this position exists in broker
-                        for pos in broker_positions:
-                            broker_symbol = pos.get('symbol', '').replace('_', '/')
-                            broker_side = pos.get('side', 'buy')
-                            # Match by symbol and side
-                            if broker_symbol == symbol and broker_side == side:
+                        for pos in broker.get_open_positions() or []:
+                            if _symbols_match(pos.get('symbol'), symbol) and str(pos.get('side', 'buy')).lower() == side:
                                 position_found_in_broker = True
                                 broker_used = broker
                                 break
                     except Exception as e:
                         print(f"Error checking broker {broker_name} for position: {e}")
-            
-            # If not found by strategy, check all brokers
+
             if not position_found_in_broker and app.brokers:
                 for broker_name, broker in app.brokers.items():
                     try:
-                        broker_positions = broker.get_open_positions()
-                        for pos in broker_positions:
-                            broker_symbol = pos.get('symbol', '').replace('_', '/')
-                            broker_side = pos.get('side', 'buy')
-                            if broker_symbol == symbol and broker_side == side:
+                        for pos in broker.get_open_positions() or []:
+                            if _symbols_match(pos.get('symbol'), symbol) and str(pos.get('side', 'buy')).lower() == side:
                                 position_found_in_broker = True
                                 broker_used = broker
                                 break
@@ -484,70 +652,58 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                     except Exception as e:
                         print(f"Error checking broker {broker_name} for position: {e}")
                         continue
-            
-            # If position exists in broker, close it via API
+
             if position_found_in_broker and broker_used:
                 try:
-                    # Convert side to OrderSide enum
                     order_side = OrderSide.SELL if side == 'buy' else OrderSide.BUY
-                    
-                    # Close position via broker API
                     closed = broker_used.close_position(symbol, order_side)
-                    
+
                     if closed:
-                        # Update local database to mark as closed
-                        # Get current price for exit price
                         try:
                             current_price = broker_used.get_current_price(symbol)
-                        except:
+                        except Exception:
                             current_price = trade.get('entry_price', 0)
-                        
-                        # Calculate final P&L
-                        entry_price = trade.get('entry_price', 0)
-                        quantity = trade.get('quantity', 0)
+
+                        entry_price = float(trade.get('entry_price', 0) or 0)
+                        quantity = float(trade.get('quantity', 0) or 0)
                         if side == 'buy':
                             final_pnl = (current_price - entry_price) * quantity
                         else:
                             final_pnl = (entry_price - current_price) * quantity
-                        
-                        # Update trade in database
-                        app.storage.update_trade(trade_id, {
-                            'status': 'closed',
-                            'exit_price': current_price,
-                            'exit_time': datetime.now(),
-                            'pnl': final_pnl
-                        })
-                        
+
+                        # Update local DB record if known, otherwise best-effort symbol update.
+                        target_trade_id = trade.get('trade_id')
+                        if target_trade_id:
+                            app.storage.update_trade(str(target_trade_id), {
+                                'status': 'closed',
+                                'exit_price': current_price,
+                                'exit_time': datetime.now(),
+                                'pnl': final_pnl
+                            })
+
                         return {
                             "success": True,
                             "message": f"Position {symbol} {side} closed successfully via broker API",
                             "method": "broker_api"
                         }
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"Failed to close position via broker API"
-                        }
+
+                    return {"success": False, "error": "Failed to close position via broker API"}
                 except Exception as e:
-                    return {
-                        "success": False,
-                        "error": f"Error closing position via broker: {str(e)}"
-                    }
-            
-            # Position doesn't exist in broker - delete from local database (phantom position)
-            success = app.storage.delete_trade(trade_id)
-            
+                    return {"success": False, "error": f"Error closing position via broker: {str(e)}"}
+
+            # Not at broker -> delete local phantom trade.
+            target_trade_id = str(trade.get('trade_id') or trade_id)
+            success = app.storage.delete_trade(target_trade_id) if target_trade_id else False
             if success:
                 return {
                     "success": True,
                     "message": f"Phantom position {symbol} {side} deleted from local database",
                     "method": "local_delete"
                 }
-            else:
-                return {"success": False, "error": "Failed to delete trade"}
+            return {"success": False, "error": "Failed to delete trade"}
         except Exception as e:
             return {"success": False, "error": str(e)}
-    
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for real-time updates"""
@@ -619,13 +775,13 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
     monthly = report_data.get('monthly_analytics', []) if report_data else []
     
     # Prepare equity curve data for Chart.js
-    equity_labels = [point['date'][:10] for point in equity_curve[-100:]] if equity_curve else []
-    equity_values = [point['equity'] for point in equity_curve[-100:]] if equity_curve else []
-    drawdown_values = [point['drawdown'] for point in equity_curve[-100:]] if equity_curve else []
+    equity_labels = [str(point.get('date', ''))[:10] for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
+    equity_values = [float(point.get('equity', 0.0) or 0.0) for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
+    drawdown_values = [float(point.get('drawdown', 0.0) or 0.0) for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
     
     # Prepare monthly data
-    monthly_labels = [m['month'] for m in monthly]
-    monthly_gains = [m['gain_pct'] for m in monthly]
+    monthly_labels = [str(m.get('month', '')) for m in monthly if isinstance(m, dict)]
+    monthly_gains = [float(m.get('gain_pct', 0.0) or 0.0) for m in monthly if isinstance(m, dict)]
     
     html = f"""
     <!DOCTYPE html>
@@ -1185,6 +1341,18 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                         <div class="metric-value">${{data.performance.total_trades || 0}}</div>
                         <div class="metric-label">Total Trades</div>
                     </div>
+                    <div class="metric">
+                        <div class="metric-value">${{data.performance.profit_factor?.toFixed(2) || 0}}</div>
+                        <div class="metric-label">Profit Factor</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${{data.performance.expectancy?.toFixed(2) || 0}}</div>
+                        <div class="metric-label">Expectancy</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${{data.data_quality?.integrity_score?.toFixed(1) || 0}}%</div>
+                        <div class="metric-label">Data Integrity Score</div>
+                    </div>
                 `;
                 
                 // Update positions
@@ -1196,14 +1364,14 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                     
                     return `
                         <tr>
-                            <td>${{pos.symbol}}</td>
+                            <td>${{pos.symbol}} ${{pos.verified_at_broker ? '✅' : '⚠️'}}</td>
                             <td>${{pos.side}}</td>
                             <td>${{pos.quantity}}</td>
                             <td>$${{pos.entry_price}}</td>
                             <td>$${{pos.current_price || pos.entry_price}}</td>
                             <td class="${{pos.pnl >= 0 ? 'positive' : 'negative'}}">$${{pos.pnl.toFixed(2)}}</td>
                             <td>
-                                <button class="btn-close" onclick="closePosition('${{pos.trade_id}}', '${{pos.symbol}}', '${{pos.side}}')" title="${{buttonTitle}}">
+                                <button class="btn-close" onclick="closePosition('${{pos.trade_id || pos.symbol.replace('/', '_')}}', '${{pos.symbol}}', '${{pos.side}}')" title="${{buttonTitle}}">
                                     ${{buttonText}}
                                 </button>
                             </td>
@@ -1231,10 +1399,22 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
                 // Update risk metrics
                 const riskMetricsDiv = document.getElementById('risk-metrics');
                 if (data.risk_metrics) {{
+                    const dq = data.data_quality || {{}};
+                    const staleRows = (dq.stale_local_trades || []).slice(0,5).map(t => `<li>${{t.symbol}} (${{t.side}})</li>`).join('');
+                    const brokerOnlyRows = (dq.broker_only_positions || []).slice(0,5).map(t => `<li>${{t.symbol}} (${{t.side}} @ ${{t.broker}})</li>`).join('');
                     riskMetricsDiv.innerHTML = `
                         <p><strong>Drawdown:</strong> ${{data.risk_metrics.drawdown_percent?.toFixed(2) || 0}}%</p>
                         <p><strong>Peak Equity:</strong> $${{data.risk_metrics.peak_equity?.toFixed(2) || 0}}</p>
                         <p><strong>Current Equity:</strong> $${{data.risk_metrics.current_equity?.toFixed(2) || 0}}</p>
+                        <p><strong>Max Drawdown:</strong> ${{data.risk_metrics.max_drawdown_percent?.toFixed(2) || 0}}%</p>
+                        <hr/>
+                        <p><strong>Data Integrity:</strong> ${{dq.integrity_score?.toFixed(1) || 0}}%</p>
+                        <p><strong>Matched Open Trades:</strong> ${{dq.matched_open_trades || 0}} / ${{dq.local_open_count || 0}}</p>
+                        <p><strong>Broker-only Positions:</strong> ${{dq.broker_only_count || 0}}</p>
+                        <p><strong>Stale Local Trades:</strong> ${{dq.stale_local_count || 0}}</p>
+                        <p><strong>Last Reconciled:</strong> ${{dq.last_reconciled_at ? new Date(dq.last_reconciled_at).toLocaleString() : 'N/A'}}</p>
+                        ${{staleRows ? `<details><summary>Stale Local Trades</summary><ul>${{staleRows}}</ul></details>` : ''}}
+                        ${{brokerOnlyRows ? `<details><summary>Broker-only Positions</summary><ul>${{brokerOnlyRows}}</ul></details>` : ''}}
                     `;
                 }}
             }}
@@ -1385,13 +1565,13 @@ def _generate_reports_html(report_data: Dict) -> str:
     monthly = report_data.get('monthly_analytics', [])
     
     # Prepare equity curve data for Chart.js
-    equity_labels = [point['date'][:10] for point in equity_curve[-100:]] if equity_curve else []
-    equity_values = [point['equity'] for point in equity_curve[-100:]] if equity_curve else []
-    drawdown_values = [point['drawdown'] for point in equity_curve[-100:]] if equity_curve else []
+    equity_labels = [str(point.get('date', ''))[:10] for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
+    equity_values = [float(point.get('equity', 0.0) or 0.0) for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
+    drawdown_values = [float(point.get('drawdown', 0.0) or 0.0) for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
     
     # Prepare monthly data
-    monthly_labels = [m['month'] for m in monthly]
-    monthly_gains = [m['gain_pct'] for m in monthly]
+    monthly_labels = [str(m.get('month', '')) for m in monthly if isinstance(m, dict)]
+    monthly_gains = [float(m.get('gain_pct', 0.0) or 0.0) for m in monthly if isinstance(m, dict)]
     
     html = f"""
     <!DOCTYPE html>

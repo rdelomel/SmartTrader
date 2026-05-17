@@ -1373,7 +1373,8 @@ class TradingAgent:
             # Determine order side and entry price first (needed for position sizing)
             signal = decision['signal']
             # CRITICAL: Disable SHORT trades if configured (0% win rate on shorts)
-            disable_shorts = self.config.get('disable_short_trades', True)
+            orchestrator_cfg = self.trading_config.get('agents', {}).get('orchestrator', {})
+            disable_shorts = orchestrator_cfg.get('disable_short_trades', True)
             if disable_shorts and (signal == Signal.SELL or (hasattr(signal, 'value') and signal.value == -1)):
                 print(f"  ❌ REJECTED: SHORT trades are disabled (0% win rate)")
                 print(f"     Signal was SELL, but shorts are disabled by configuration")
@@ -1414,7 +1415,7 @@ class TradingAgent:
             
             # CRITICAL: Check position correlation BEFORE portfolio exposure check
             # Relaxed limits to allow more trading opportunities (was blocking trades)
-            portfolio_risk_config = self.config.get('portfolio_risk', {})
+            portfolio_risk_config = self.trading_config.get('portfolio_risk', {})
             max_correlated_positions = portfolio_risk_config.get('max_correlated_positions', 5)  # Read from config, default 5
             max_correlated_pairs = portfolio_risk_config.get('max_correlated_pairs', 3)  # Read from config, default 3
             
