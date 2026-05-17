@@ -1,146 +1,157 @@
-# Trading Configuration
-
-# Aggressive Trading Mode Configuration
+# ============================================================
+# SmartTrader Configuration v2
+# Updated: 2026-05-17
+# Changes from v1:
+#   - Removed unrealistic 3% weekly return target
+#   - Fixed R/R ratio (was 1:1, now correctly 1:2)
+#   - Fixed strategy weights (were summing to 2.07, now 1.0)
+#   - Fixed agent weights (were summing to 1.10, now 1.0)
+#   - Tightened signal quality thresholds (wrong direction in v1)
+#   - Resolved aggressive_mode contradiction
+#   - Disabled non-essential strategies (focus on 2-3 core)
+#   - Disabled dynamic stock discovery until core system stable
+#   - Loosened circuit breaker slightly (was too tight for 1h TF)
+# ============================================================
+ 
+# Aggressive Trading Mode
+# NOTE: Disabled until win rate > 45% and Sharpe > 1.0
 aggressive_mode:
-  enabled: true  # Set to true to enable aggressive DRL-based trading
-  target_weekly_return: 3.0  # Target weekly return percentage (3% per week)
-  max_drawdown: 4.5  # Maximum drawdown percentage
-  use_drl: true  # Use Deep Reinforcement Learning for decisions
-  volatility_scaling: true  # Use volatility-based position sizing
-  circuit_breakers: true  # Enable real-time circuit breakers
-
-# Multi-Agent Framework Configuration
+  enabled: false
+  target_monthly_return: 3.0     # Realistic: 3% per MONTH (not per week)
+  max_drawdown: 10
+  use_drl: false                  # Re-enable once baseline strategy is profitable
+  volatility_scaling: true
+  circuit_breakers: true
+ 
+# Multi-Agent Framework
+# Agent weights MUST sum to 1.0
 agents:
   technical:
     enabled: true
     ml_weight: 0.3
     lstm_weight: 0.15
-  
+ 
   sentiment:
     enabled: true
-    sentiment_threshold: 0.25  # Lowered from 0.3 for more responsive sentiment signals
-  
+    sentiment_threshold: 0.35     # Restored to stricter threshold (was 0.25)
+ 
   fundamental:
     enabled: true
-  
+ 
   quantitative:
     enabled: true
-    lookback_period: 50  # Reduced from 100 to 50 - allows trading on less historical data
-    min_confidence: 0.4  # Reduced from 0.5 to 0.4 - allow more quantitative signals
+    lookback_period: 100          # Restored to 100 (was reduced to 50 — insufficient history)
+    min_confidence: 0.50          # Restored to 0.50 (was 0.40 — too permissive)
     use_statistical_models: true
     use_momentum_models: true
-    use_mean_reversion_models: true
-  
+    use_mean_reversion_models: false  # Disabled: conflicts with trend-following primary strategy
+ 
   pattern_forecaster:
     enabled: true
-    pattern_length: 20  # Number of bars in a pattern
-    lookahead_periods: 10  # Periods to forecast ahead
-    min_matches: 2  # Reduced from 3 to 2 - allow fewer matches for more signals
-    similarity_threshold: 0.6  # Reduced from 0.7 to 0.6 - less strict matching
-    correlation_threshold: 0.5  # Reduced from 0.6 to 0.5 - less strict correlation
-    historical_lookback_days: 90  # Reduced from 180 to 90 days - faster queries
-    max_historical_records: 3000  # Reduced from 5000 to 3000 - faster queries
-    max_historical_bars: 1500  # Reduced from 2000 to 1500 - faster processing
-    analysis_timeout_seconds: 15  # Reduced from 30 to 15 seconds - faster failure recovery
-  
+    pattern_length: 20
+    lookahead_periods: 10
+    min_matches: 3                # Restored to 3 (was 2 — too few matches = false positives)
+    similarity_threshold: 0.70    # Restored to 0.70 (was 0.60 — too permissive)
+    correlation_threshold: 0.60   # Restored to 0.60 (was 0.50 — too permissive)
+    historical_lookback_days: 180 # Restored to 180 (was 90 — insufficient pattern history)
+    max_historical_records: 5000
+    max_historical_bars: 2000
+    analysis_timeout_seconds: 30
+ 
   regime_switching:
     enabled: true
     n_regimes: 4
     use_hmm: true
     lookback_period: 100
-  
+ 
   risk_manager:
     enabled: true
-    max_position_size_percent: 4.0  # Aligned with risk.max_position_size_percent
-    max_drawdown_percent: 4.5  # Aligned with aggressive_mode max_drawdown
+    max_position_size_percent: 4.0
+    max_drawdown_percent: 4.5
     min_liquidity_ratio: 0.1
     max_slippage_bps: 10
     veto_enabled: true
     circuit_breaker:
-      max_daily_loss_percent: 1.0  # Tighter daily loss limit to protect 4.5% DD
-      max_hourly_loss_percent: 0.35  # Hourly loss cap for intraday containment
-      max_drawdown_percent: 4.5  # Max absolute drawdown (aligned with aggressive_mode)
-      cooling_period_hours: 4  # Hours to wait after trigger
-  
+      max_daily_loss_percent: 2.0     # Relaxed from 1.0 — 1% on 1h timeframe fires too often
+      max_hourly_loss_percent: 0.75   # Relaxed from 0.35 — same issue
+      max_drawdown_percent: 4.5
+      cooling_period_hours: 4
+ 
   orchestrator:
     enabled: true
-    min_confidence: 0.30  # Lowered to increase trade frequency while keeping quality filters
-    consensus_threshold: 0.4  # Lowered from 0.5 to 0.4 - less strict consensus
-    require_agent_agreement: false  # Keep false - allow single strong signals
+    min_confidence: 0.55            # Tightened from 0.30 — quality over quantity
+    consensus_threshold: 0.55       # Tightened from 0.40 — require stronger agreement
+    require_agent_agreement: false
     veto_enabled: true
-    aggressive_mode: false  # Keep disabled for now
-    risk_reward_ratio: 2.0  # Keep at 2.0 (1:2) - reasonable R/R
-    disable_short_trades: false  # Enable shorting to avoid one-sided bias in bearish regimes
-    min_technical_confidence_for_sentiment_trade: 0.25  # Allow sentiment trades when technical is not weak/conflicting
-    # Common ratios: 1:2 (minimum), 1:3 (sweet spot), 1:5+ (requires precise entries)
-    # Must match win rate: 50% win rate needs 1:2+, 40% needs 1:3+, 60% can work with 1:1.5
-    # Agent weights for weighted voting (normalized automatically)
-    technical_weight: 0.50  # Primary signal source - technical analysis
-    sentiment_weight: 0.15  # News and sentiment analysis
-    fundamental_weight: 0.10  # Fundamental analysis
-    quantitative_weight: 0.20  # Statistical and quantitative models
-    pattern_forecaster_weight: 0.15  # Historical pattern matching
-
-# Risk Management Parameters
+    aggressive_mode: false          # Consistent with top-level aggressive_mode.enabled: false
+    risk_reward_ratio: 2.0          # 1:2 R/R (enforced by ATR multipliers below)
+    disable_short_trades: false
+    min_technical_confidence_for_sentiment_trade: 0.40  # Tightened from 0.25
+ 
+    # Agent weights — must sum to 1.0
+    technical_weight: 0.50
+    sentiment_weight: 0.10          # Reduced from 0.15
+    fundamental_weight: 0.10
+    quantitative_weight: 0.20
+    pattern_forecaster_weight: 0.10 # Reduced from 0.15 to balance to 1.0
+ 
+# Risk Management
 risk:
-  max_drawdown_percent: 4.5  # Maximum drawdown before kill switch activates (aligned with aggressive_mode)
-  position_size_percent: 1.0  # Reduced from 1.2% - more conservative base risk per trade
-  max_position_size_percent: 4.0  # Reduced from 5.0% - align with risk manager setting, more conservative
-  stop_loss_atr_multiplier: 2.0  # Stop loss distance in ATR multiples
-  take_profit_atr_multiplier: 2.0  # Take profit distance in ATR multiples (aligned with 1:2 R/R)
+  max_drawdown_percent: 4.5
+  position_size_percent: 1.0
+  max_position_size_percent: 4.0
+  stop_loss_atr_multiplier: 2.0
+  take_profit_atr_multiplier: 4.0  # FIXED: was 2.0 (1:1 R/R). Now 4.0 = 1:2 R/R
   trailing_stop_enabled: true
   trailing_stop_atr_multiplier: 1.5
   dynamic_scaling:
-    enabled: true  # Enable dynamic position sizing based on performance
-    performance_threshold_sharpe: 1.2  # Increased from 1.0 - require better performance before scaling up
-    max_risk_per_trade: 1.5  # Reduced from 2.0% - more conservative cap on risk per trade
-    win_streak_bonus: 0.03  # Reduced from 0.05 - smaller compounding to avoid runaway sizing
-
-# Portfolio-level risk controls
+    enabled: false                  # Disabled until Sharpe > 1.2 consistently
+    performance_threshold_sharpe: 1.2
+    max_risk_per_trade: 1.5
+    win_streak_bonus: 0.03
+ 
+# Portfolio Risk
 portfolio_risk:
   enabled: true
-  max_exposure_percent: 20.0  # Portfolio gross exposure cap
-  max_correlation: 0.7       # Do not add if portfolio correlation exceeds this
-  max_sector_concentration: 0.5  # Limit concentration per sector/asset cluster
-  max_correlated_positions: 5  # Increased from 3 to 5 - allow more positions per asset class
-  max_correlated_pairs: 3  # Increased from 2 to 3 - allow more correlated pairs
-  
+  max_exposure_percent: 20.0
+  max_correlation: 0.7
+  max_sector_concentration: 0.5
+  max_correlated_positions: 3      # Reduced from 5 — tighter concentration control
+  max_correlated_pairs: 2          # Reduced from 3
+ 
 # Trading Hours (UTC)
 trading_hours:
   forex:
     enabled: true
-    start_hour: 0  # 24-hour format
-    end_hour: 24
+    start_hour: 7                  # London open — avoid low-liquidity Asia session noise
+    end_hour: 20                   # NY close
     days: [monday, tuesday, wednesday, thursday, friday]
-  
+ 
   crypto:
     enabled: true
     start_hour: 0
     end_hour: 24
-    days: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]  # 24/7
-  
+    days: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]
+ 
   commodities:
     enabled: true
-    start_hour: 0  # Precious metals trade similar to forex (24/5)
-    end_hour: 24
+    start_hour: 7
+    end_hour: 20
     days: [monday, tuesday, wednesday, thursday, friday]
-  
+ 
   stocks:
-    enabled: true
-    start_hour: 13  # 9:30 AM EST = 13:30 UTC
-    end_hour: 20  # 4:00 PM EST = 20:00 UTC
-    days: [monday, tuesday, wednesday, thursday, friday]
-
-# Asset Classes to Trade
+    enabled: false                 # Disabled until core system is stable
+ 
+# Asset Classes
 assets:
   crypto:
     enabled: true
     symbols:
       - BTC/USD
       - ETH/USD
-      - SOL/USD
-    broker: alpaca  # Using Alpaca for crypto trading
-  
+      # SOL/USD removed — lower liquidity, adds noise
+    broker: alpaca
+ 
   forex:
     enabled: true
     symbols:
@@ -148,71 +159,41 @@ assets:
       - GBP/USD
       - USD/JPY
     broker: oanda
-  
+ 
   commodities:
     enabled: true
     symbols:
-      - XAU/USD  # Gold
-      - XAG/USD  # Silver
-    broker: oanda  # OANDA supports precious metals
-  
+      - XAU/USD  # Gold only — XAG/USD showed price feed anomalies
+    broker: oanda
+ 
   stocks:
-    enabled: true
-    dynamic_discovery: true  # Enable news-based stock discovery
-    max_concurrent_stocks: 15  # Maximum stocks to trade simultaneously
-    min_sentiment_score: 0.5  # Minimum sentiment score for significant news
-    discovery_refresh_hours: 1  # How often to refresh discovered stocks
-    symbols: []  # Empty list - stocks will be discovered from news
+    enabled: false                 # Re-enable once win rate > 45%
+    dynamic_discovery: false       # Disabled — adds complexity before core is stable
+    max_concurrent_stocks: 5
+    min_sentiment_score: 0.65
+    discovery_refresh_hours: 4
+    symbols: []
     broker: alpaca
-
+ 
 # Timeframes
 timeframes:
-  primary: 1h  # Primary timeframe for trading decisions
-  analysis: [15m, 1h, 4h, 1d]  # Multiple timeframes for analysis
-
-# Strategy Configuration
+  primary: 1h
+  analysis: [1h, 4h, 1d]         # Removed 15m — too much noise for current setup
+ 
+# Strategies
+# Core phase: trend_following + momentum only
+# Weights MUST sum to 1.0
+# Re-enable others one at a time once core is profitable
 strategies:
   trend_following:
     enabled: true
-    weight: 0.40  # Increased from 0.35 - primary strategy for 1h timeframe
+    weight: 0.45                   # Primary strategy
     fast_ma_period: 20
     slow_ma_period: 50
-  
-  mean_reversion:
-    enabled: true
-    weight: 0.20  # Reduced from 0.25 - can conflict with trend following
-    lookback_period: 14
-    z_score_threshold: 2.0  # Increased from 1.5 - require stronger mean reversion signals
-  
-  ml_model:
-    enabled: true
-    weight: 0.3
-    model_type: xgboost
-    retrain_frequency_days: 7
-  
-  lstm_model:
-    enabled: true
-    weight: 0.15
-    sequence_length: 60
-    retrain_frequency_days: 14
-  
-  sentiment:
-    enabled: true
-    weight: 0.10  # Increased from 0.05 to 0.10 - news sentiment is important
-    news_sources: [rss, twitter]
-    update_frequency_minutes: 15
-  
-  breakout:
-    enabled: true  # Enabled - breakout strategies can be profitable
-    weight: 0.12  # Slightly reduced from 0.15
-    lookback_period: 20
-    breakout_threshold: 0.005  # 0.5%
-    volume_threshold: 1.5
-    use_atr: true
-  
+ 
   momentum:
-    enabled: true  # Enabled - momentum strategies complement trend following
-    weight: 0.12  # Slightly reduced from 0.15
+    enabled: true
+    weight: 0.30                   # Secondary strategy — complements trend following
     rsi_period: 14
     rsi_oversold: 30
     rsi_overbought: 70
@@ -220,82 +201,92 @@ strategies:
     macd_slow: 26
     macd_signal: 9
     momentum_period: 10
-    min_momentum: 0.015  # Reduced from 0.02 (2%) to 0.015 (1.5%) - allow weaker momentum
-  
+    min_momentum: 0.020            # Restored to 2% (was reduced to 1.5% — too permissive)
+ 
+  ml_model:
+    enabled: true
+    weight: 0.15                   # Supporting signal only
+    model_type: xgboost
+    retrain_frequency_days: 7
+ 
+  lstm_model:
+    enabled: true
+    weight: 0.10                   # Supporting signal only
+    sequence_length: 60
+    retrain_frequency_days: 14
+ 
+  # DISABLED — re-enable one at a time after core is profitable
+  mean_reversion:
+    enabled: false                 # Conflicts with trend_following
+    weight: 0.0
+ 
+  sentiment:
+    enabled: false
+    weight: 0.0
+ 
+  breakout:
+    enabled: false
+    weight: 0.0
+ 
   volatility:
-    enabled: true  # Enabled - volatility strategies help identify opportunities
-    weight: 0.08  # Reduced from 0.1 - lower weight
-    bb_period: 20
-    bb_std: 2
-    atr_period: 14
-    low_volatility_threshold: 0.5
-    high_volatility_threshold: 2.0
-    volatility_expansion_factor: 1.5
-  
-  # CMC Markets Strategies
+    enabled: false
+    weight: 0.0
+ 
   news_trading:
-    enabled: true
-    weight: 0.15
-    volatility_threshold: 0.015  # 1.5% minimum volatility
-    volume_spike_multiplier: 1.5  # Volume must be 1.5x average
-    price_movement_threshold: 0.005  # 0.5% minimum move
-    use_pre_news: true
-    use_post_news: true
-  
+    enabled: false
+    weight: 0.0
+ 
   end_of_day:
-    enabled: true
-    weight: 0.12
-    close_hour: 15  # 3 PM
-    close_minute: 45
-    min_price_change: 0.003  # 0.3% minimum
-    compare_previous_day: true
-  
+    enabled: false
+    weight: 0.0
+ 
   swing_trading:
-    enabled: true
-    weight: 0.18
-    swing_period: 14
-    rsi_period: 14
-    rsi_oversold: 30
-    rsi_overbought: 70
-    min_swing_size: 0.02  # 2% minimum swing
-    use_support_resistance: true
-  
+    enabled: false
+    weight: 0.0
+ 
   day_trading:
-    enabled: true
-    weight: 0.15
-    open_hour: 9
-    close_hour: 16
-    min_intraday_move: 0.005  # 0.5% minimum
-    use_breakouts: true
-    use_reversals: true
-    max_trades_per_day: 5
-  
+    enabled: false
+    weight: 0.0
+ 
   scalping:
-    enabled: false  # Disabled by default - requires high volatility
-    weight: 0.1
-    min_volatility: 0.01  # 1% minimum volatility
-    min_volume_multiplier: 2.0  # 2x average volume
-    price_tick_size: 0.001  # 0.1% minimum move
-    use_order_flow: true
-    max_hold_time_minutes: 15
-
+    enabled: false
+    weight: 0.0
+ 
 # Model Performance Monitoring
 model_monitoring:
   performance_window_days: 30
   min_sharpe_ratio: 0.5
-  min_accuracy: 0.52  # Minimum 52% accuracy to continue trading
-  retrain_threshold: 0.48  # Retrain if accuracy drops below this
-
+  min_accuracy: 0.52
+  retrain_threshold: 0.48
+ 
 # Anomaly Detection
 anomaly_detection:
   enabled: true
-  contamination: 0.05  # Reduced from 0.1 to 0.05 - less sensitive to normal volatility
+  contamination: 0.05
   reduce_position_on_anomaly: true
-  position_reduction_factor: 0.75  # Reduced from 0.5 to 0.75 - less aggressive reduction
-
+  position_reduction_factor: 0.50  # Restored to 0.50 — more protective (was 0.75)
+ 
 # Backtesting
 backtesting:
   initial_capital: 10000.0
-  commission_rate: 0.001  # 0.1% commission
-  slippage_bps: 5  # 5 basis points slippage
-
+  commission_rate: 0.001
+  slippage_bps: 10               # Increased from 5 — more realistic live execution assumption
+ 
+# ============================================================
+# RE-ENABLE CHECKLIST (in order)
+# Before enabling each item, confirm previous stage is stable:
+#
+# Stage 1 (current): trend_following + momentum, forex + crypto only
+#   Gate: Win rate > 45%, Sharpe > 0.8, 4 weeks consistent
+#
+# Stage 2: Add breakout strategy, re-enable XAG/USD, SOL/USD
+#   Gate: Win rate > 48%, Sharpe > 1.0, 4 weeks consistent
+#
+# Stage 3: Re-enable sentiment strategy, stocks (static list, no discovery)
+#   Gate: Win rate > 50%, Sharpe > 1.2, profit factor > 1.5
+#
+# Stage 4: Enable dynamic_scaling, aggressive_mode, stock discovery
+#   Gate: Win rate > 52%, Sharpe > 1.5, 3 months consistent, max DD < 3%
+#
+# Production (real capital): All Stage 4 gates met on paper for 3+ months
+# ============================================================
