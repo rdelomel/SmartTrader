@@ -1,9 +1,13 @@
-"""Abstract base class for broker implementations"""
+"""Abstract base class for broker implementations — with auto-reconnect"""
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from enum import Enum
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class OrderType(Enum):
@@ -31,11 +35,16 @@ class OrderStatus(Enum):
 
 class BaseBroker(ABC):
     """Abstract base class for all broker implementations"""
-    
+
+    # Reconnect defaults (override in subclass __init__ if needed)
+    MAX_RECONNECT_ATTEMPTS: int = 5
+    RECONNECT_BASE_DELAY: float = 2.0   # seconds; doubles each attempt
+    RECONNECT_MAX_DELAY: float = 60.0   # cap
+
     def __init__(self, api_key: str, api_secret: str, testnet: bool = True):
         """
         Initialize broker connection
-        
+
         Args:
             api_key: API key for broker
             api_secret: API secret for broker
@@ -45,27 +54,21 @@ class BaseBroker(ABC):
         self.api_secret = api_secret
         self.testnet = testnet
         self.connected = False
-    
+        self._reconnect_count = 0
+        self._last_connect_attempt: Optional[datetime] = None
+
+    # ── Abstract interface ────────────────────────────────────────────────────
+
     @abstractmethod
     def connect(self) -> bool:
-        """
-        Establish connection to broker
-        
-        Returns:
-            True if connection successful, False otherwise
-        """
+        """Establish connection to broker. Returns True on success."""
         pass
-    
+
     @abstractmethod
     def disconnect(self) -> bool:
-        """
-        Close connection to broker
-        
-        Returns:
-            True if disconnection successful, False otherwise
-        """
+        """Close connection to broker. Returns True on success."""
         pass
-    
+
     @abstractmethod
     def get_historical_data(
         self,
@@ -75,48 +78,19 @@ class BaseBroker(ABC):
         end_date: Optional[datetime] = None,
         limit: Optional[int] = None
     ) -> List[Dict]:
-        """
-        Fetch historical price data
-        
-        Args:
-            symbol: Trading pair symbol (e.g., 'BTC/USDT', 'EUR/USD')
-            timeframe: Timeframe string (e.g., '1h', '4h', '1d')
-            start_date: Start date for data
-            end_date: End date for data (None for latest)
-            limit: Maximum number of candles to return
-        
-        Returns:
-            List of dictionaries with OHLCV data
-            Format: [{'timestamp': datetime, 'open': float, 'high': float, 
-                     'low': float, 'close': float, 'volume': float}, ...]
-        """
+        """Fetch historical OHLCV data."""
         pass
-    
+
     @abstractmethod
     def get_current_price(self, symbol: str) -> float:
-        """
-        Get current market price for symbol
-        
-        Args:
-            symbol: Trading pair symbol
-        
-        Returns:
-            Current price as float
-        """
+        """Get current market price for symbol."""
         pass
-    
+
     @abstractmethod
     def get_account_balance(self) -> Dict[str, float]:
-        """
-        Get account balance information
-        
-        Returns:
-            Dictionary with balance information
-            Format: {'total': float, 'available': float, 'used': float, 
-                    'currencies': {'USD': float, 'BTC': float, ...}}
-        """
+        """Get account balance information."""
         pass
-    
+
     @abstractmethod
     def place_order(
         self,
@@ -129,122 +103,143 @@ class BaseBroker(ABC):
         take_profit: Optional[float] = None,
         stop_loss: Optional[float] = None
     ) -> Dict:
-        """
-        Place a trading order
-        
-        Args:
-            symbol: Trading pair symbol
-            side: BUY or SELL
-            order_type: Type of order (MARKET, LIMIT, etc.)
-            quantity: Amount to trade
-            price: Limit price (required for LIMIT orders)
-            stop_price: Stop price (for STOP_LOSS orders)
-            take_profit: Take profit price
-            stop_loss: Stop loss price
-        
-        Returns:
-            Dictionary with order information
-            Format: {'order_id': str, 'status': OrderStatus, 'filled_quantity': float, ...}
-        """
+        """Place a trading order."""
         pass
-    
+
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
+        """Cancel an open order."""
+        pass
+
+    @abstractmethod
+    def get_open_orders(self) -> List[Dict]:
+        """Get list of open orders."""
+        pass
+
+    @abstractmethod
+    def get_positions(self) -> List[Dict]:
+        """Get current open positions."""
+        pass
+
+    # ── Auto-reconnect (shared by all subclasses) ─────────────────────────────
+
+    def ensure_connected(self) -> bool:
         """
-        Cancel an open order
-        
+        Guarantee the broker is connected before an operation.
+        Uses exponential backoff up to MAX_RECONNECT_ATTEMPTS.
+
+        Returns:
+            True  - connected (either was already, or reconnected successfully)
+            False - could not reconnect after all attempts
+        """
+        if self.connected:
+            return True
+
+        broker_name = type(self).__name__
+        for attempt in range(1, self.MAX_RECONNECT_ATTEMPTS + 1):
+            delay = min(
+                self.RECONNECT_BASE_DELAY * (2 ** (attempt - 1)),
+                self.RECONNECT_MAX_DELAY
+            )
+            logger.warning(
+                f"[{broker_name}] Not connected. Reconnect attempt {attempt}/"
+                f"{self.MAX_RECONNECT_ATTEMPTS} (waiting {delay:.0f}s)..."
+            )
+            if attempt > 1:
+                time.sleep(delay)
+
+            try:
+                success = self.connect()
+                if success:
+                    self._reconnect_count += 1
+                    self._last_connect_attempt = datetime.now()
+                    logger.info(
+                        f"[{broker_name}] Reconnected successfully "
+                        f"(total reconnects: {self._reconnect_count})"
+                    )
+                    return True
+            except Exception as e:
+                logger.error(f"[{broker_name}] Reconnect attempt {attempt} failed: {e}")
+
+        logger.error(
+            f"[{broker_name}] All {self.MAX_RECONNECT_ATTEMPTS} reconnect "
+            "attempts exhausted. Broker unavailable."
+        )
+        return False
+
+    def safe_call(self, method_name: str, *args, **kwargs):
+        """
+        Wrapper that calls a broker method, auto-reconnecting first if needed.
+
+        Usage:
+            result = broker.safe_call("place_order", symbol="BTC/USD", ...)
+        """
+        if not self.ensure_connected():
+            return None
+        method = getattr(self, method_name, None)
+        if method is None:
+            raise AttributeError(f"{type(self).__name__} has no method '{method_name}'")
+        return method(*args, **kwargs)
+
+    # ── Order fill polling ────────────────────────────────────────────────────
+
+    def wait_for_fill(
+        self,
+        order_id: str,
+        timeout_seconds: int = 60,
+        poll_interval: float = 5.0
+    ) -> Dict:
+        """
+        Poll order status until filled, cancelled, or timeout.
+
         Args:
-            order_id: ID of order to cancel
-        
+            order_id:        The order ID returned by place_order
+            timeout_seconds: Give up after this many seconds
+            poll_interval:   Seconds between polls
+
         Returns:
-            True if cancellation successful, False otherwise
+            Final order status dict, or {'status': 'timeout'} if not filled
         """
-        pass
-    
-    @abstractmethod
-    def get_open_positions(self) -> List[Dict]:
-        """
-        Get all open positions
-        
-        Returns:
-            List of position dictionaries
-            Format: [{'symbol': str, 'side': str, 'quantity': float, 
-                     'entry_price': float, 'unrealized_pnl': float, ...}, ...]
-        """
-        pass
-    
-    @abstractmethod
+        broker_name = type(self).__name__
+        start = time.time()
+        while time.time() - start < timeout_seconds:
+            if not self.ensure_connected():
+                time.sleep(poll_interval)
+                continue
+            try:
+                status = self.get_order_status(order_id)
+                s = status.get("status", "")
+                sv = s.value if hasattr(s, "value") else str(s)
+                if sv in ("filled", "FILLED", "cancelled", "CANCELLED",
+                          "rejected", "REJECTED"):
+                    logger.info(f"[{broker_name}] Order {order_id} -> {sv}")
+                    return status
+            except Exception as e:
+                logger.warning(f"[{broker_name}] poll error for {order_id}: {e}")
+            time.sleep(poll_interval)
+
+        logger.warning(f"[{broker_name}] Order {order_id} not filled within {timeout_seconds}s")
+        return {"order_id": order_id, "status": "timeout"}
+
     def get_order_status(self, order_id: str) -> Dict:
         """
-        Get status of a specific order
-        
-        Args:
-            order_id: ID of order to check
-        
-        Returns:
-            Dictionary with order status information
+        Get status of a specific order.
+        Subclasses should override with broker-specific implementation.
         """
-        pass
-    
-    @abstractmethod
-    def close_position(self, symbol: str, side: Optional[OrderSide] = None) -> bool:
-        """
-        Close an open position
-        
-        Args:
-            symbol: Trading pair symbol
-            side: Side to close (None to close all positions for symbol)
-        
-        Returns:
-            True if position closed successfully, False otherwise
-        """
-        pass
-    
-    def get_supported_assets(self) -> List[str]:
-        """
-        Get list of supported asset classes
-        
-        Returns:
-            List of asset class strings (e.g., ['crypto', 'forex'])
-        """
-        return []
-    
-    def is_market_open(self, symbol: str) -> bool:
-        """
-        Check if market is currently open for trading
-        
-        Args:
-            symbol: Trading pair symbol
-        
-        Returns:
-            True if market is open, False otherwise
-        """
-        # Default implementation - can be overridden
-        return True
-    
-    def check_liquidity(self, symbol: str, order_size: float) -> Dict:
-        """
-        Check market liquidity for an order
-        
-        Args:
-            symbol: Trading pair symbol
-            order_size: Size of order to check
-        
-        Returns:
-            Dictionary with liquidity information:
-            {
-                'sufficient': bool,
-                'estimated_slippage_bps': float,
-                'order_book_depth': float,
-                'reason': str
-            }
-        """
-        # Default implementation - returns sufficient liquidity
-        # Should be overridden by broker implementations that support order book data
-        return {
-            'sufficient': True,
-            'estimated_slippage_bps': 5.0,  # Default estimate
-            'order_book_depth': order_size * 10,  # Placeholder
-            'reason': 'Liquidity check not implemented for this broker'
-        }
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement get_order_status()"
+        )
 
+    # ── Utility helpers ───────────────────────────────────────────────────────
+
+    def is_market_open(self) -> bool:
+        """
+        Check if market is currently open.
+        Default returns True - subclasses should override for exchange-specific hours.
+        """
+        return True
+
+    def __repr__(self) -> str:
+        mode = "testnet" if self.testnet else "live"
+        state = "connected" if self.connected else "disconnected"
+        return f"<{type(self).__name__} [{mode}] [{state}]>"
