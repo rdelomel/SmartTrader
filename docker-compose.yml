@@ -1,0 +1,82 @@
+# docker-compose.yml — SmartTrader on NAS (Synology / QNAP / TrueNAS)
+# Usage:
+#   1. Copy to your NAS (e.g. /volume1/docker/smartrader/)
+#   2. Create .env file alongside it with your API keys
+#   3. Run: docker-compose up -d
+#
+# Works with: Synology Container Manager, QNAP Container Station,
+#             TrueNAS SCALE, Portainer, or plain docker-compose
+
+version: "3.8"
+
+services:
+  smarttrader:
+    image: smarttrader:latest          # built locally — see build section below
+    build:
+      context: .
+      dockerfile: Dockerfile.nas       # lighter NAS-optimised Dockerfile
+    container_name: smarttrader
+    restart: unless-stopped            # auto-restart on crash or NAS reboot
+
+    # ── Environment variables ────────────────────────────────────────────────
+    env_file:
+      - .env                           # Your API keys live here — never commit!
+
+    environment:
+      - TRADING_MODE=paper             # Change to 'live' only when ready
+      - ENABLE_LIVE_TRADING=false
+      - LOG_LEVEL=INFO
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TZ=Australia/Melbourne         # Your timezone
+
+    # ── Persistent volumes ───────────────────────────────────────────────────
+    # All data survives container restarts
+    volumes:
+      - ./data:/app/data               # SQLite trading database
+      - ./logs:/app/logs               # Log files
+      - ./models:/app/models           # Trained ML models
+      - ./config:/app/config           # Config YAMLs (edit without rebuild)
+
+    # ── Dashboard port (optional — remove if you don't need the web UI) ──────
+    ports:
+      - "8000:8000"                    # Access dashboard at http://NAS-IP:8000
+
+    # ── Resource limits (tune to your NAS specs) ─────────────────────────────
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G                 # Enough for Python + XGBoost + SQLite
+          cpus: "1.0"                  # 1 core is sufficient for 1h timeframe
+        reservations:
+          memory: 512M
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 60s
+      timeout: 15s
+      start_period: 120s
+      retries: 3
+
+    # ── Logging ──────────────────────────────────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Optional: Watchtower for automatic image updates ─────────────────────
+  # Remove this service if you prefer manual updates
+  watchtower:
+    image: containrrr/watchtower
+    container_name: smarttrader-updater
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 86400 smarttrader   # Check for updates daily
+    environment:
+      - TZ=Australia/Melbourne
+
+networks:
+  default:
+    name: smarttrader-net
