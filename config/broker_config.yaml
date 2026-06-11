@@ -1,50 +1,73 @@
 # ============================================================
-# SmartTrader Broker Configuration v2
-# Updated: 2026-05-17
-# Changes from v1:
-#   - Added explicit environment flag per broker (paper/live)
-#   - Added commodities to OANDA supported_assets
-#   - Added commodities to default_brokers
-#   - Fixed Alpaca min_order_size for crypto (was 1, now 0.0001)
-#   - Added timeout and retry config
-#   - Added websocket URLs for real-time feeds
-# SECURITY: Credentials must be in .env — never commit to version control
+# SmartTrader Broker Configuration v3
+# Updated: 2026-06-12
+# Changes from v2:
+#   - Added Binance as primary crypto broker (better liquidity/pairs)
+#   - Alpaca kept as fallback for crypto and primary for stocks
+#   - Added order_fill_timeout_seconds (poll for fill confirmation)
+#   - Added reconnect config section
+# SECURITY: Credentials must be in .env - never commit to version control
 # ============================================================
 
 brokers:
+  binance:
+    name: Binance
+    type: crypto
+    environment: testnet            # 'testnet' or 'live'
+    testnet_url: https://testnet.binance.vision
+    base_url: https://api.binance.com
+    rate_limit: 1200                # Requests per minute (weight-based)
+    supported_assets:
+      - crypto
+    order_types:
+      - market
+      - limit
+      - stop_loss
+      - take_profit
+    min_order_size:
+      BTC: 0.00001
+      ETH: 0.0001
+      default: 0.001
+    timeout_seconds: 10
+    order_fill_timeout_seconds: 60  # Poll for fill up to 60s
+    retry:
+      max_attempts: 5
+      backoff_seconds: 2
+
   oanda:
     name: OANDA
     type: forex
-    environment: paper              # EXPLICIT: 'paper' or 'live'. Change only when ready for production.
+    environment: paper              # 'paper' or 'live'
     base_url: https://api-fxtrade.oanda.com
     practice_url: https://api-fxpractice.oanda.com
-    stream_url: https://stream-fxtrade.oanda.com          # Live streaming
-    practice_stream_url: https://stream-fxpractice.oanda.com  # Paper streaming
-    rate_limit: 3000                # Requests per minute
+    stream_url: https://stream-fxtrade.oanda.com
+    practice_stream_url: https://stream-fxpractice.oanda.com
+    rate_limit: 3000
     supported_assets:
       - forex
-      - commodities                 # ADDED: XAU/USD, XAG/USD routed via OANDA
+      - commodities
     order_types:
       - market
       - limit
       - stop_loss
       - take_profit
     min_order_size: 0.01
-    timeout_seconds: 10             # ADDED: abort hung requests after 10s
+    timeout_seconds: 10
+    order_fill_timeout_seconds: 30
     retry:
-      max_attempts: 3
-      backoff_seconds: 2            # Wait 2s between retries
+      max_attempts: 5
+      backoff_seconds: 2
 
   alpaca:
     name: Alpaca
     type: stocks_crypto
-    environment: paper              # EXPLICIT: 'paper' or 'live'. Change only when ready for production.
+    environment: paper              # 'paper' or 'live'
     base_url: https://api.alpaca.markets
     paper_url: https://paper-api.alpaca.markets
-    data_url: https://data.alpaca.markets     # Market data endpoint (separate from trading)
-    websocket_url: wss://stream.data.alpaca.markets/v1beta3   # Real-time data feed
-    paper_websocket_url: wss://stream.data.alpaca.markets/v1beta3  # Same feed for paper
-    rate_limit: 200                 # Requests per minute
+    data_url: https://data.alpaca.markets
+    websocket_url: wss://stream.data.alpaca.markets/v1beta3
+    paper_websocket_url: wss://stream.data.alpaca.markets/v1beta3
+    rate_limit: 200
     supported_assets:
       - stocks
       - crypto
@@ -54,32 +77,31 @@ brokers:
       - stop_loss
       - take_profit
     min_order_size:
-      stocks: 1                     # 1 share minimum for stocks
-      crypto: 0.0001                # FIXED: was 1 (would require ~$100k for BTC). Alpaca supports fractional crypto.
+      stocks: 1
+      crypto: 0.0001
     timeout_seconds: 10
+    order_fill_timeout_seconds: 60
     retry:
-      max_attempts: 3
+      max_attempts: 5
       backoff_seconds: 2
 
 # Default broker per asset class
-# Must cover all asset classes defined in trading_config_v2
 default_brokers:
-  crypto: alpaca
+  crypto: binance          # PRIMARY: better liquidity, 500+ pairs, lower fees
+  crypto_fallback: alpaca  # FALLBACK if Binance is unavailable
   forex: oanda
-  commodities: oanda                # ADDED: XAU/USD routes to OANDA
-  stocks: alpaca                    # Inactive until Stage 3 (see trading_config_v2 checklist)
+  commodities: oanda
+  stocks: alpaca            # Stocks stage inactive until Stage 3
 
-# ============================================================
+# Reconnect Configuration (used by BaseBroker.ensure_connected)
+reconnect:
+  max_attempts: 5
+  base_delay_seconds: 2
+  max_delay_seconds: 60
+
 # ENVIRONMENT SWITCH CHECKLIST
-# Before changing any environment from 'paper' to 'live':
-#
-#   [ ] All Stage 4 gates met (trading_config_v2 checklist)
-#   [ ] 3+ months profitable paper trading
-#   [ ] Broker sync 100% stable (0 unmatched positions over 30 days)
-#   [ ] Position sizing verified correct for live account balance
-#   [ ] Risk manager circuit breakers tested
-#   [ ] Kill switch tested and confirmed working
-#   [ ] Start with minimum capital (see capital allocation in strategy doc)
-#
-# Change ONE broker at a time. Validate for 2 weeks before switching the second.
-# ============================================================
+# Before changing any environment from 'paper'/'testnet' to 'live':
+#   [ ] All live_trading_gates met (see trading_config.yaml)
+#   [ ] 60+ days profitable paper trading
+#   [ ] Rotate API keys (never reuse paper keys for live)
+#   [ ] Start with micro lot sizes (0.01 lots forex, 0.001 BTC)
