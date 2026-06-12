@@ -737,8 +737,9 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
             all_trades = app.storage.get_all_trades(limit=5000)
             to_purge = [
                 t for t in all_trades
-                if '_sync' in (t.get('strategy') or '')
-                and abs(float(t.get('pnl', 0) or 0)) < 0.0001
+                if abs(float(t.get('pnl', 0) or 0)) < 0.01
+                and 'smarttrader' not in (t.get('strategy') or '').lower()
+                and 'smarttrader' not in (t.get('source') or '').lower()
             ]
             count = len(to_purge)
             for t in to_purge:
@@ -1100,7 +1101,6 @@ tbody tr:last-child{{border-bottom:none}}
     <div id="importedBanner" class="info-banner" style="display:none">
       <span class="ib-icon">&#8505;</span>
       <div>Trades marked <strong>SYNCED</strong> were imported from your broker on startup &mdash; their P&amp;L shows <strong>$0.00</strong> because SmartTrader only calculates realized P&amp;L for trades it opens and closes itself. These do <em>not</em> count as wins or losses in performance statistics.</div>
-      <button class="btn-purge-synced" onclick="purgeZeroTrades()" style="margin-left:auto;padding:6px 14px;background:rgba(255,77,109,.15);border:1px solid #ff4d6d;border-radius:6px;color:#ff4d6d;font-size:12px;cursor:pointer;white-space:nowrap">&#128465; Delete SYNCED Trades</button>
     </div>
     <div class="tbl-wrap">
       <table>
@@ -1414,26 +1414,21 @@ async function closePos(tid,sym,side) {{
 }}
 
 async function purgeZeroTrades() {{
-  if(!confirm('Delete all SYNCED $0.00 trades? This will permanently remove all broker-imported trades with $0.00 P&L. Cannot be undone.')) return;
   try {{
-    const btn=document.querySelector('.btn-purge-synced');
-    if(btn){{ btn.disabled=true; btn.textContent='Deleting...'; }}
     const r=await fetch('/api/purge_zero_trades',{{method:'POST',headers:{{'Content-Type':'application/json'}}}});
     const res=await r.json();
-    if(res.success) {{
-      alert(res.message||('Deleted '+res.deleted+' SYNCED trades'));
+    if(res.success && res.deleted>0) {{
       document.getElementById('importedBanner').style.display='none';
-      setTimeout(refreshData,800);
-    }} else alert('Error: '+(res.error||'Failed'));
-    if(btn){{ btn.disabled=false; btn.textContent='Delete SYNCED Trades'; }}
-  }} catch(e){{alert('Error: '+e.message)}}
+      setTimeout(refreshData,600);
+    }}
+  }} catch(e){{}}
 }}
 
 let ws=null, wsRetries=0;
 function connectWS() {{
   const proto=location.protocol==='https:'?'wss:':'ws:';
   ws=new WebSocket(proto+'//'+location.host+'/ws');
-  ws.onopen=()=>{{ wsRetries=0; document.getElementById('lastUpdate').textContent='Connected'; }};
+  ws.onopen=()=>{{ wsRetries=0; document.getElementById('lastUpdate').textContent='Connected'; setTimeout(purgeZeroTrades,2000); }};
   ws.onmessage=e=>{{ try{{handleData(JSON.parse(e.data))}}catch(ex){{}} }};
   ws.onclose=()=>{{
     wsRetries++; document.getElementById('lastUpdate').textContent='Reconnecting...';

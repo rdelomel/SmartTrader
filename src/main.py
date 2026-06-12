@@ -2898,8 +2898,9 @@ class TradingAgent:
             all_trades = self.storage.get_all_trades(limit=5000)
             to_purge = [
                 t for t in all_trades
-                if '_sync' in (t.get('strategy') or '')
-                and abs(float(t.get('pnl', 0) or 0)) < 0.0001
+                if abs(float(t.get('pnl', 0) or 0)) < 0.01
+                and 'smarttrader' not in (t.get('strategy') or '').lower()
+                and 'smarttrader' not in (t.get('source') or '').lower()
             ]
             count = len(to_purge)
             if count == 0:
