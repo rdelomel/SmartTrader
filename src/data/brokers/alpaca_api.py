@@ -81,10 +81,17 @@ class AlpacaBroker(BaseBroker):
             params = {'timeframe': alpaca_tf, 'limit': periods}
             if is_crypto:
                 params['symbols'] = alpaca_symbol
+            def _fmt_ts(dt):
+                """Format datetime as RFC3339Z — strips tz to avoid +00:00Z double-suffix."""
+                from datetime import timezone as _tz
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(_tz.utc).replace(tzinfo=None)
+                return dt.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+
             if start_date:
-                params['start'] = start_date.isoformat() + 'Z'
+                params['start'] = _fmt_ts(start_date)
             if end_date:
-                params['end'] = end_date.isoformat() + 'Z'
+                params['end'] = _fmt_ts(end_date)
 
             response = self.session.get(bars_url, params=params)
             response.raise_for_status()
@@ -363,7 +370,12 @@ class AlpacaBroker(BaseBroker):
         ]
 
     def is_market_open(self, symbol: str) -> bool:
-        """Check if the US market is currently open."""
+        """Check if the market is currently open.
+        Crypto markets are 24/7 — always return True for crypto symbols.
+        """
+        # Crypto symbols contain '/' (e.g. BTC/USD) — always open
+        if '/' in symbol:
+            return True
         try:
             response = self.session.get(f"{self.base_url}/v2/clock")
             response.raise_for_status()
