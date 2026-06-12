@@ -106,7 +106,7 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
             for broker in app.brokers.values():
                 try:
                     balance_info = broker.get_account_balance()
-                    total_balance += float(balance_info.get('total', 0.0) or 0.0)
+                    total_balance += float(balance_info.get('equity', 0.0) or balance_info.get('portfolio_value', 0.0) or balance_info.get('balance', 0.0))
                 except Exception:
                     pass
         if total_balance <= 0:
@@ -747,7 +747,7 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
             for broker in brokers.values():
                 try:
                     balance_info = broker.get_account_balance()
-                    total_balance += balance_info.get('total', 0.0)
+                    total_balance += (balance_info.get('equity', 0.0) or balance_info.get('portfolio_value', 0.0) or balance_info.get('balance', 0.0))
                 except:
                     pass
             # Use a reasonable default if we can't get balance
@@ -1090,7 +1090,7 @@ tbody tr:last-child{{border-bottom:none}}
 
   <!-- Summary metrics -->
   <div class="rpt-grid">
-    <div class="rpt-card"><div class="rc-val {pnl_class}">${{gnet:,.2f}}</div><div class="rc-lbl">Net Profit</div></div>
+    <div class="rpt-card"><div class="rc-val {pnl_class}">${gnet:,.2f}</div><div class="rc-lbl">Net Profit</div></div>
     <div class="rpt-card"><div class="rc-val pos">{gwin:.1f}%</div><div class="rc-lbl">Win Rate</div></div>
     <div class="rpt-card"><div class="rc-val">{gtot}</div><div class="rc-lbl">Total Trades</div></div>
     <div class="rpt-card"><div class="rc-val {pf_class}">{gpf:.2f}</div><div class="rc-lbl">Profit Factor</div></div>
@@ -1118,11 +1118,11 @@ tbody tr:last-child{{border-bottom:none}}
       <table class="rpt-tbl">
         <thead><tr><th>Metric</th><th>Value</th></tr></thead>
         <tbody>
-          <tr><td>Average Win</td><td class="ppos">${{gaw:,.2f}}</td></tr>
-          <tr><td>Average Loss</td><td class="pneg">${{gal:,.2f}}</td></tr>
-          <tr><td>Largest Win</td><td class="ppos">${{glw:,.2f}}</td></tr>
-          <tr><td>Largest Loss</td><td class="pneg">${{gll:,.2f}}</td></tr>
-          <tr><td>Expectancy</td><td class="{'ppos' if gexp >= 0 else 'pneg'}">${{gexp:,.2f}}</td></tr>
+          <tr><td>Average Win</td><td class="ppos">${gaw:,.2f}</td></tr>
+          <tr><td>Average Loss</td><td class="pneg">${gal:,.2f}</td></tr>
+          <tr><td>Largest Win</td><td class="ppos">${glw:,.2f}</td></tr>
+          <tr><td>Largest Loss</td><td class="pneg">${gll:,.2f}</td></tr>
+          <tr><td>Expectancy</td><td class="{'ppos' if gexp >= 0 else 'pneg'}">${gexp:,.2f}</td></tr>
           <tr><td>Loss Rate</td><td>{gloss:.1f}%</td></tr>
         </tbody>
       </table>
