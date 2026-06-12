@@ -1165,7 +1165,7 @@ function switchTab(name, btn) {{
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 const fmt$ = n => n==null?'—':(n<0?'-$':'$')+Math.abs(n).toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}});
-const fmt% = n => n==null?'—':(n>=0?'+':'')+parseFloat(n).toFixed(2)+'%';
+const fmtPct = n => n==null?'—':(n>=0?'+':'')+parseFloat(n).toFixed(2)+'%';
 const fmtN = (n,d=2) => n==null?'—':parseFloat(n).toFixed(d);
 function pClass(n) {{ return n>0.001?'ppos':n<-0.001?'pneg':'pzero'; }}
 function mClass(n) {{ return n>0.001?'pos':n<-0.001?'neg':''; }}
@@ -1184,7 +1184,7 @@ function updateMetrics(data) {{
 
   setM('mEquity',    fmt$(eq),     mClass(eq-bal));
   setM('mBalance',   fmt$(bal),    '');
-  setM('mTotalReturn', fmt%(ret),  mClass(ret));
+  setM('mTotalReturn', fmtPct(ret),  mClass(ret));
   setM('mRealizedPnl', fmt$(rpnl), mClass(rpnl));
   setM('mUnrealizedPnl',fmt$(upnl),mClass(upnl));
   setM('mSharpe',    fmtN(sharpe), sharpe>=1?'pos':sharpe<0?'neg':'');
