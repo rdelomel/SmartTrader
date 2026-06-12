@@ -805,7 +805,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
         pf = d.get('profit_factor', 0)
         sign = '+' if pnl >= 0 else ''
         clr = 'pos' if pnl >= 0 else 'neg'
-        return f\'<tr><td>{label}</td><td>{trades}</td><td><span class="{clr}">{sign}${pnl:.2f}</span></td><td>{wr:.1f}%</td><td>{pf:.2f}</td></tr>\'
+        return (f'<tr><td>{label}</td><td>{trades}</td>' f'<td><span class="{clr}">{sign}${pnl:.2f}</span></td>' f'<td>{wr:.1f}%</td><td>{pf:.2f}</td></tr>')
 
     periods_html = period_row('Today','today') + period_row('This Week','week') + period_row('This Month','month') + period_row('This Year','year') + period_row('All Time','all')
 
@@ -1927,4 +1927,3 @@ def _generate_reports_html(report_data: Dict) -> str:
     </html>
     """
     return html
-
