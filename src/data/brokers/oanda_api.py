@@ -88,6 +88,11 @@ class OANDABroker(BaseBroker):
             oanda_symbol = symbol.replace('/', '_')
             url = f"{self.base_url}/v3/instruments/{oanda_symbol}/candles"
             response = self.session.get(url, params=params)
+            if response.status_code == 400 and ('from' in params or 'to' in params):
+                # Fallback: date-range request rejected — retry with count-only
+                logger.warning(f"OANDA date-range request failed for {oanda_symbol}, falling back to count={periods}")
+                fallback_params = {'granularity': granularity, 'count': periods, 'price': 'M'}
+                response = self.session.get(url, params=fallback_params)
             response.raise_for_status()
             data = response.json()
             candles = data.get('candles', [])
