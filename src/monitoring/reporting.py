@@ -106,7 +106,7 @@ class TradingReporter:
             }
         
         winning_trades = [t for t in closed_trades if t.get('pnl', 0) > 0]
-        losing_trades = [t for t in closed_trades if t.get('pnl', 0) <= 0]  # Include break-even (P&L = 0) in losses
+        losing_trades = [t for t in closed_trades if t.get('pnl', 0) < 0]   # Only true losses; P&L=0 (imported/unresolved) = break-even
         
         total_profit = sum(t.get('pnl', 0) for t in winning_trades)
         total_loss = abs(sum(t.get('pnl', 0) for t in losing_trades))
