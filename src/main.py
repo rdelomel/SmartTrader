@@ -745,20 +745,20 @@ class TradingAgent:
             # Fallback to forex hours if commodities hours not configured
             asset_config = assets_config.get('forex', {}).get('trading_hours', {})
 
-        # Check if today is a trading day — key is 'allowed_days' (not 'days')
+        # Check if today is a trading day â key is 'allowed_days' (not 'days')
         allowed_days = [d.lower() if isinstance(d, str) else str(d).lower() for d in asset_config.get('allowed_days', [])]
         print(f"  Trading hours check for {asset_class}: day={current_day}, allowed_days={allowed_days}")
         if current_day not in allowed_days:
-            print(f"  ❌ Day {current_day} not in allowed days")
+            print(f"  â Day {current_day} not in allowed days")
             return False
 
-        # Parse start/end — supports both "HH:MM" strings and integer hours
+        # Parse start/end â supports both "HH:MM" strings and integer hours
         def _parse_hour(val, default):
             if isinstance(val, int):
                 return val
             if isinstance(val, str) and ':' in val:
                 h, m = int(val.split(':')[0]), int(val.split(':')[1])
-                # "23:59" means end-of-day — treat as 24 (exclusive upper bound)
+                # "23:59" means end-of-day â treat as 24 (exclusive upper bound)
                 return 24 if (h == 23 and m == 59) else h
             return default
 
@@ -817,7 +817,11 @@ class TradingAgent:
             # Step 3: Reconcile P&L for existing imported broker trades
             print("\n[STARTUP] Reconciling P&L for imported broker trades...")
             self._reconcile_imported_pnl()
-            
+
+            # Step 4: Purge unresolvable $0-P&L broker import artifacts
+            print("\n[STARTUP] Purging $0-P&L broker-sync artifacts...")
+            self._purge_zero_pnl_imports()
+
             open_trades = self.storage.get_open_trades() if self.storage else []
             print(f"[SUCCESS] Startup sync complete: Found {len(open_trades)} open positions in database")
             if open_trades:
@@ -880,7 +884,7 @@ class TradingAgent:
                     kill_switch_brokers.append(f"aggregated ({drawdown:.2f}%)")
                 
                 if kill_switch_active:
-                    print(f"⚠️  Kill switch ACTIVE: Drawdown exceeds limit on: {', '.join(kill_switch_brokers)}")
+                    print(f"â ï¸  Kill switch ACTIVE: Drawdown exceeds limit on: {', '.join(kill_switch_brokers)}")
                     self.logger.log_risk_event({
                         'event': 'kill_switch_active',
                         'affected_brokers': kill_switch_brokers
@@ -902,7 +906,7 @@ class TradingAgent:
                     print(f"  Enabled: {config.get('enabled', False)}")
                     
                     if not config.get('enabled', False):
-                        print(f"  ⏭️  Skipping {asset_class} - disabled in config")
+                        print(f"  â­ï¸  Skipping {asset_class} - disabled in config")
                         continue
                     
                     # Check trading hours from config before processing asset class
@@ -912,7 +916,7 @@ class TradingAgent:
                     if not is_trading_hours:
                         current_day = datetime.now().strftime('%A')
                         current_time = datetime.now().strftime('%H:%M:%S UTC')
-                        print(f"  ⏸️  Skipping {asset_class} - not in trading hours (Day: {current_day}, Time: {current_time})")
+                        print(f"  â¸ï¸  Skipping {asset_class} - not in trading hours (Day: {current_day}, Time: {current_time})")
                         continue
                     
                     # Get broker - handle different asset classes
@@ -938,7 +942,7 @@ class TradingAgent:
                         # Forex must use OANDA (forex broker), not Alpaca
                         broker = self.brokers.get('forex') or self.brokers.get('oanda')
                         if not broker:
-                            print(f"  ❌ No OANDA broker available for forex trading")
+                            print(f"  â No OANDA broker available for forex trading")
                             continue
                         print(f"  Using OANDA broker for forex")
                     elif asset_class == 'commodities' and broker_name == 'oanda':
@@ -952,22 +956,22 @@ class TradingAgent:
                         print(f"  [WARNING] No broker available for {asset_class}")
                         continue
                     
-                    print(f"  ✓ Broker found: {type(broker).__name__}")
+                    print(f"  â Broker found: {type(broker).__name__}")
                     
                     # For stocks: use dynamic discovery if enabled, otherwise use fixed list
                     if asset_class == 'stocks' and config.get('dynamic_discovery', False) and self.stock_discovery:
                         # Discover stocks from news
                         discovered_stocks = self.stock_discovery.discover_stocks_from_news()
                         symbols = discovered_stocks
-                        print(f"  📊 Dynamic discovery: Found {len(symbols)} stocks from news: {symbols}")
+                        print(f"  ð Dynamic discovery: Found {len(symbols)} stocks from news: {symbols}")
                     else:
                         # Use fixed symbol list
                         symbols = config.get('symbols', [])
-                        print(f"  📊 Processing {len(symbols)} symbols: {symbols}")
+                        print(f"  ð Processing {len(symbols)} symbols: {symbols}")
                     
                     # Process each symbol for this asset class
                     for symbol in symbols:
-                        print(f"  → Processing {symbol}...")
+                        print(f"  â Processing {symbol}...")
                         self._process_symbol(symbol, broker, asset_class)
                 
                 # Monitor and manage all open positions (including external ones)
@@ -991,7 +995,7 @@ class TradingAgent:
                 if not broker.is_market_open(symbol):
                     current_day = datetime.now().strftime('%A')
                     current_time = datetime.now().strftime('%H:%M:%S UTC')
-                    print(f"⏸️  Skipping {symbol} ({asset_class}) - Market is closed (Day: {current_day}, Time: {current_time})")
+                    print(f"â¸ï¸  Skipping {symbol} ({asset_class}) - Market is closed (Day: {current_day}, Time: {current_time})")
                     return
             
             # Fetch latest data
@@ -1022,18 +1026,18 @@ class TradingAgent:
                                 'symbol': symbol,
                                 'anomaly_count': recent_anomalies.sum()
                             })
-                            print(f"  ⚠️  Skipping {symbol} - Severe anomaly detected (last 3 bars)")
+                            print(f"  â ï¸  Skipping {symbol} - Severe anomaly detected (last 3 bars)")
                             return
                         elif anomalies.iloc[-1]:  # Just current bar is anomaly
                             # Don't block - just log and reduce position size if needed
-                            print(f"  ⚠️  Minor anomaly detected for {symbol} - proceeding with caution")
+                            print(f"  â ï¸  Minor anomaly detected for {symbol} - proceeding with caution")
                             self.logger.log_risk_event({
                                 'event': 'minor_anomaly_detected',
                                 'symbol': symbol
                             })
                 except Exception as e:
                     # If anomaly detection fails, don't block trading
-                    print(f"  ⚠️  Anomaly detection error (non-critical): {e}")
+                    print(f"  â ï¸  Anomaly detection error (non-critical): {e}")
                     # Continue with trading - anomaly detection is optional safety feature
             
             # Fetch news for sentiment analysis (non-blocking - failures don't prevent trading)
@@ -1041,9 +1045,9 @@ class TradingAgent:
                 news_items = self.news_fetcher.fetch_news_for_symbol(symbol) if self.news_fetcher else None
                 if not news_items:
                     news_items = []  # Ensure it's a list, not None
-                    print(f"  ⚠️  No news items fetched for {symbol} - proceeding without sentiment")
+                    print(f"  â ï¸  No news items fetched for {symbol} - proceeding without sentiment")
             except Exception as e:
-                print(f"  ⚠️  News fetching error (non-critical): {e} - proceeding without sentiment")
+                print(f"  â ï¸  News fetching error (non-critical): {e} - proceeding without sentiment")
                 news_items = []  # Don't block trading on news fetch failures
             
             # Get account balance for risk management - use broker-specific balance for this trade
@@ -1076,7 +1080,7 @@ class TradingAgent:
                     
                     # Validate: available should not exceed total (unless leverage is intentional)
                     if avail_bal > total_bal * 1.1:  # More than 10% over (likely leverage)
-                        print(f"  ⚠️  WARNING [{broker_name}]: Available balance (${avail_bal:.2f}) > Total (${total_bal:.2f}) - likely leverage")
+                        print(f"  â ï¸  WARNING [{broker_name}]: Available balance (${avail_bal:.2f}) > Total (${total_bal:.2f}) - likely leverage")
                         print(f"     Using conservative available balance: ${total_bal * 0.95:.2f}")
                         avail_bal = total_bal * 0.95  # Use 95% of total as conservative estimate
                     
@@ -1098,7 +1102,7 @@ class TradingAgent:
                 broker_dd_manager = self.drawdown_managers[trade_broker_name]
                 if not broker_dd_manager.is_trading_allowed():
                     drawdown = broker_dd_manager.calculate_drawdown()
-                    print(f"  ⚠️  Skipping {symbol}: Broker {trade_broker_name} kill switch active (drawdown: {drawdown:.2f}%)")
+                    print(f"  â ï¸  Skipping {symbol}: Broker {trade_broker_name} kill switch active (drawdown: {drawdown:.2f}%)")
                     return
             
             # Use broker-specific balance for position sizing, but aggregated for overall risk checks
@@ -1170,8 +1174,8 @@ class TradingAgent:
                         'confidence': agent_data.get('confidence', 0.0)
                     }
                 
-                print(f"  ❌ Trade NOT executed: {reason}")
-                print(f"  📊 Signal Quality Metrics:")
+                print(f"  â Trade NOT executed: {reason}")
+                print(f"  ð Signal Quality Metrics:")
                 print(f"     Final Signal: {signal_value.name if hasattr(signal_value, 'name') else signal_value}")
                 print(f"     Final Confidence: {confidence:.3f} (required: {min_conf:.3f})")
                 print(f"     Weighted Score: {decision.get('weighted_score', 0):.3f}")
@@ -1192,8 +1196,8 @@ class TradingAgent:
                 }, event='trade_skipped')
             else:
                 # Enhanced logging for executed trades
-                print(f"  ✅ Trade WILL be executed - calling _execute_trade()...")
-                print(f"  📊 Execution Metrics:")
+                print(f"  â Trade WILL be executed - calling _execute_trade()...")
+                print(f"  ð Execution Metrics:")
                 print(f"     Signal: {signal_value.name if hasattr(signal_value, 'name') else signal_value}")
                 print(f"     Confidence: {confidence:.3f}")
                 print(f"     Weighted Score: {decision.get('weighted_score', 0):.3f}")
@@ -1251,16 +1255,16 @@ class TradingAgent:
                         
                         if is_forex and broker_type == 'AlpacaBroker':
                             # Forex trade sent to Alpaca - find OANDA broker instead
-                            print(f"  ⚠️  Warning: Forex symbol {symbol} sent to Alpaca (which doesn't support forex)")
-                            print(f"  🔄 Attempting to find OANDA broker...")
+                            print(f"  â ï¸  Warning: Forex symbol {symbol} sent to Alpaca (which doesn't support forex)")
+                            print(f"  ð Attempting to find OANDA broker...")
                             broker = self.brokers.get('forex') or self.brokers.get('oanda')
                             if not broker:
                                 raise Exception(f"No OANDA broker available for forex trading. Forex symbol {symbol} cannot be traded with Alpaca.")
-                            print(f"  ✅ Found OANDA broker for forex trading")
+                            print(f"  â Found OANDA broker for forex trading")
                             # Update OrderManager to use the correct broker
                             if self.order_manager:
                                 self.order_manager.broker = broker
-                                print(f"  ✅ Updated OrderManager to use OANDA broker")
+                                print(f"  â Updated OrderManager to use OANDA broker")
             
             # Get account balance - use AVAILABLE balance for position sizing, not total
             # Also update per-broker drawdown managers with their individual balances
@@ -1287,10 +1291,10 @@ class TradingAgent:
                                 age_seconds = (datetime.now() - b._last_balance_timestamp).total_seconds()
                                 if age_seconds < 300:  # 5 minutes
                                     data_source = 'cached'
-                                    print(f"  ⚠️  {broker_name} API unavailable, using cached balance")
+                                    print(f"  â ï¸  {broker_name} API unavailable, using cached balance")
                                 else:
                                     data_source = 'error'
-                                    print(f"  ❌ {broker_name} API unavailable and cache expired")
+                                    print(f"  â {broker_name} API unavailable and cache expired")
                     
                     account_balance += total_bal
                     available_balance += avail_bal
@@ -1392,7 +1396,7 @@ class TradingAgent:
             orchestrator_cfg = self.trading_config.get('agents', {}).get('orchestrator', {})
             disable_shorts = orchestrator_cfg.get('disable_short_trades', True)
             if disable_shorts and (signal == Signal.SELL or (hasattr(signal, 'value') and signal.value == -1)):
-                print(f"  ❌ REJECTED: SHORT trades are disabled (0% win rate)")
+                print(f"  â REJECTED: SHORT trades are disabled (0% win rate)")
                 print(f"     Signal was SELL, but shorts are disabled by configuration")
                 return
             
@@ -1402,7 +1406,7 @@ class TradingAgent:
             take_profit = decision.get('take_profit')
             
             if not position_info or position_info.get('quantity', 0) == 0:
-                print(f"  ⚠️  No position size from orchestrator, calculating manually...")
+                print(f"  â ï¸  No position size from orchestrator, calculating manually...")
                 # Fallback to manual calculation - use AVAILABLE balance, not total
                 if stop_loss is None:
                     stop_loss = entry_price * 0.98
@@ -1413,7 +1417,7 @@ class TradingAgent:
             
             quantity = position_info.get('quantity', 0)
             if quantity == 0:
-                print(f"  ❌ Trade NOT executed: Position quantity is 0")
+                print(f"  â Trade NOT executed: Position quantity is 0")
                 print(f"     Position info: {position_info}")
                 return
             
@@ -1465,7 +1469,7 @@ class TradingAgent:
                 
                 current_class_count = len(positions_by_class.get(current_asset_class, []))
                 if current_class_count >= max_correlated_positions:
-                    print(f"  ❌ REJECTED: Correlation limit exceeded for {current_asset_class}")
+                    print(f"  â REJECTED: Correlation limit exceeded for {current_asset_class}")
                     print(f"     Current {current_asset_class} positions: {current_class_count}, Limit: {max_correlated_positions}")
                     print(f"     Existing positions: {', '.join(positions_by_class.get(current_asset_class, []))}")
                     return
@@ -1475,13 +1479,13 @@ class TradingAgent:
                     for group in correlated_forex_groups:
                         existing_in_group = [p for p in positions_by_class.get('forex', []) if p in group]
                         if symbol in group and len(existing_in_group) >= max_correlated_pairs:
-                            print(f"  ❌ REJECTED: Correlated forex pair limit exceeded")
+                            print(f"  â REJECTED: Correlated forex pair limit exceeded")
                             print(f"     Symbol {symbol} is correlated with: {', '.join(group)}")
                             print(f"     Existing correlated positions: {', '.join(existing_in_group)}")
                             print(f"     Limit: {max_correlated_pairs} correlated pairs")
                             return
                 
-                print(f"  ✅ Correlation check passed: {current_asset_class} positions: {current_class_count + 1}/{max_correlated_positions}")
+                print(f"  â Correlation check passed: {current_asset_class} positions: {current_class_count + 1}/{max_correlated_positions}")
             
             # CRITICAL: Check portfolio-level exposure limits BEFORE placing order
             # This prevents opening positions that exceed total portfolio exposure limits
@@ -1493,7 +1497,7 @@ class TradingAgent:
                 # Validate: If available_balance > account_balance, we might have leverage
                 # Use the smaller of the two for conservative exposure calculation
                 if available_balance > account_balance * 1.1:
-                    print(f"  ⚠️  WARNING: Available balance (${available_balance:.2f}) > Total (${account_balance:.2f}) - using conservative balance for exposure")
+                    print(f"  â ï¸  WARNING: Available balance (${available_balance:.2f}) > Total (${account_balance:.2f}) - using conservative balance for exposure")
                     exposure_base_balance = account_balance  # Use total, not available (which includes leverage)
                 
                 # Get current open positions from brokers to calculate total exposure
@@ -1554,7 +1558,7 @@ class TradingAgent:
                                         'value': pos_value
                                     })
                         except Exception as e:
-                            print(f"  ⚠️  Error getting positions from {broker_name} for portfolio check: {e}")
+                            print(f"  â ï¸  Error getting positions from {broker_name} for portfolio check: {e}")
                 
                 current_exposure_pct = (current_exposure / exposure_base_balance * 100) if exposure_base_balance > 0 else 0.0
                 proposed_total_exposure = current_exposure + order_value
@@ -1562,7 +1566,7 @@ class TradingAgent:
                 
                 # Validation: If calculated exposure > base balance, something is wrong
                 if proposed_total_exposure > exposure_base_balance * 1.5:
-                    print(f"  ⚠️  WARNING: Calculated exposure (${proposed_total_exposure:.2f}) > Base balance (${exposure_base_balance:.2f}) - using conservative estimate")
+                    print(f"  â ï¸  WARNING: Calculated exposure (${proposed_total_exposure:.2f}) > Base balance (${exposure_base_balance:.2f}) - using conservative estimate")
                     proposed_exposure_pct = min(proposed_exposure_pct, 100.0)  # Cap at 100%
                 max_exposure_pct = self.portfolio_risk_manager.max_portfolio_exposure
                 
@@ -1581,13 +1585,13 @@ class TradingAgent:
                     max_exposure_value = exposure_base_balance * (max_exposure_pct / 100)
                     remaining_capacity = max(0, max_exposure_value - current_exposure)
                     
-                    print(f"    ❌ PORTFOLIO EXPOSURE LIMIT EXCEEDED!")
+                    print(f"    â PORTFOLIO EXPOSURE LIMIT EXCEEDED!")
                     print(f"       Would be {proposed_exposure_pct:.1f}%, limit is {max_exposure_pct:.1f}%")
                     print(f"       Remaining capacity: ${remaining_capacity:.2f}")
                     
                     if remaining_capacity < order_value * 0.1:  # Less than 10% of proposed, reject
                         error_msg = f"Portfolio exposure limit exceeded: Would be {proposed_exposure_pct:.1f}%, limit is {max_exposure_pct:.1f}%. Current exposure: {current_exposure_pct:.1f}%"
-                        print(f"  ❌ Trade REJECTED: {error_msg}")
+                        print(f"  â Trade REJECTED: {error_msg}")
                         self.logger.log_error(Exception(error_msg), {
                             'symbol': symbol,
                             'action': 'execute_trade',
@@ -1600,7 +1604,7 @@ class TradingAgent:
                         return
                     else:
                         # Reduce position size to fit within portfolio limits
-                        print(f"  ⚠️  Reducing position size to fit portfolio limits:")
+                        print(f"  â ï¸  Reducing position size to fit portfolio limits:")
                         print(f"     Original value: ${order_value:.2f}")
                         print(f"     Remaining capacity: ${remaining_capacity:.2f}")
                         quantity = remaining_capacity / entry_price
@@ -1610,7 +1614,7 @@ class TradingAgent:
                         print(f"     Adjusted quantity: {quantity:.4f}")
                         print(f"     Adjusted value: ${order_value:.2f}")
                 else:
-                    print(f"    ✅ Portfolio exposure check passed ({proposed_exposure_pct:.1f}% <= {max_exposure_pct:.1f}%)")
+                    print(f"    â Portfolio exposure check passed ({proposed_exposure_pct:.1f}% <= {max_exposure_pct:.1f}%)")
             
             # Check if we have enough available balance (for BUY orders)
             # If not, reduce position size to fit available balance
@@ -1621,7 +1625,7 @@ class TradingAgent:
                 
                 if adjusted_quantity < quantity * 0.5:  # If we need to reduce by more than 50%, reject
                     error_msg = f"Insufficient available balance: Need ${order_value:.2f}, have ${available_balance:.2f} (would require >50% reduction)"
-                    print(f"  ❌ Trade NOT executed: {error_msg}")
+                    print(f"  â Trade NOT executed: {error_msg}")
                     self.logger.log_error(Exception(error_msg), {
                         'symbol': symbol,
                         'action': 'execute_trade',
@@ -1630,7 +1634,7 @@ class TradingAgent:
                     })
                     return
                 else:
-                    print(f"  ⚠️  Adjusting position size to fit available balance:")
+                    print(f"  â ï¸  Adjusting position size to fit available balance:")
                     print(f"     Original quantity: {quantity:.4f}")
                     print(f"     Adjusted quantity: {adjusted_quantity:.4f}")
                     quantity = adjusted_quantity
@@ -1640,11 +1644,11 @@ class TradingAgent:
             
             # Final safety check: Ensure OrderManager is using the correct broker
             if self.order_manager and self.order_manager.broker != broker:
-                print(f"  🔄 Updating OrderManager broker from {type(self.order_manager.broker).__name__} to {type(broker).__name__}")
+                print(f"  ð Updating OrderManager broker from {type(self.order_manager.broker).__name__} to {type(broker).__name__}")
                 self.order_manager.broker = broker
             
             # Place order
-            print(f"  📤 Placing order via OrderManager...")
+            print(f"  ð¤ Placing order via OrderManager...")
             print(f"  Using broker: {type(self.order_manager.broker).__name__}")
             order_result = self.order_manager.place_order(
                 symbol=symbol,
@@ -1669,26 +1673,26 @@ class TradingAgent:
                 
                 # Log quantity mismatch if significant
                 if abs(filled_quantity - quantity) > 0.01:
-                    print(f"  ⚠️  Quantity mismatch: Calculated={quantity:.4f}, Executed={filled_quantity:.4f} (difference: {abs(filled_quantity - quantity):.4f})")
+                    print(f"  â ï¸  Quantity mismatch: Calculated={quantity:.4f}, Executed={filled_quantity:.4f} (difference: {abs(filled_quantity - quantity):.4f})")
                     quantity = filled_quantity  # Use executed quantity for consistency
                 
                 # Use executed price if available (may differ from expected due to slippage)
                 if executed_price and abs(executed_price - entry_price) > 0.01:
-                    print(f"  ⚠️  Price difference: Expected=${entry_price:.2f}, Executed=${executed_price:.2f} (slippage: {abs(executed_price - entry_price):.2f})")
+                    print(f"  â ï¸  Price difference: Expected=${entry_price:.2f}, Executed=${executed_price:.2f} (slippage: {abs(executed_price - entry_price):.2f})")
                     entry_price = executed_price
                 
                 # CRITICAL: Ensure stop_loss and take_profit are never None before storing
                 # If they're None, calculate emergency fallbacks
                 if stop_loss is None:
-                    print(f"  ❌ CRITICAL: Stop loss is None! Calculating emergency fallback...")
+                    print(f"  â CRITICAL: Stop loss is None! Calculating emergency fallback...")
                     if side == OrderSide.BUY:
                         stop_loss = entry_price * 0.98  # 2% stop loss for longs
                     else:
                         stop_loss = entry_price * 1.02  # 2% stop loss for shorts
-                    print(f"  ⚠️  EMERGENCY: Set stop loss to ${stop_loss:.2f} (2% default)")
+                    print(f"  â ï¸  EMERGENCY: Set stop loss to ${stop_loss:.2f} (2% default)")
                 
                 if take_profit is None and stop_loss is not None:
-                    print(f"  ⚠️  WARNING: Take profit is None! Calculating emergency fallback...")
+                    print(f"  â ï¸  WARNING: Take profit is None! Calculating emergency fallback...")
                     risk = abs(entry_price - stop_loss)
                     if risk > 0:
                         reward = risk * 2.0  # Default 1:2 risk/reward
@@ -1696,7 +1700,7 @@ class TradingAgent:
                             take_profit = entry_price + reward
                         else:
                             take_profit = entry_price - reward
-                        print(f"  ⚠️  EMERGENCY: Set take profit to ${take_profit:.2f} (1:2 R/R)")
+                        print(f"  â ï¸  EMERGENCY: Set take profit to ${take_profit:.2f} (1:2 R/R)")
                 
                 # Successful order - store as open trade with EXECUTED quantity and price
                 trade_data = {
@@ -1714,18 +1718,18 @@ class TradingAgent:
                 
                 stored_id = self.storage.store_trade(trade_data)
                 if stored_id:
-                    print(f"  ✅ Trade stored in database with ID: {stored_id}")
+                    print(f"  â Trade stored in database with ID: {stored_id}")
                     if stop_loss:
-                        print(f"  📊 Stop Loss: ${stop_loss:.2f} ({abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
+                        print(f"  ð Stop Loss: ${stop_loss:.2f} ({abs((entry_price - stop_loss) / entry_price * 100):.2f}% risk)")
                     else:
-                        print(f"  ⚠️  WARNING: Stop Loss is NULL - this is a critical issue!")
+                        print(f"  â ï¸  WARNING: Stop Loss is NULL - this is a critical issue!")
                     if take_profit:
                         risk = abs(entry_price - stop_loss) if stop_loss else 0
                         reward = abs(take_profit - entry_price) if take_profit else 0
                         rr_ratio = reward / risk if risk > 0 else 0
-                        print(f"  📊 Take Profit: ${take_profit:.2f} (Risk/Reward: 1:{rr_ratio:.2f})")
+                        print(f"  ð Take Profit: ${take_profit:.2f} (Risk/Reward: 1:{rr_ratio:.2f})")
                     else:
-                        print(f"  ⚠️  WARNING: Take Profit is NULL")
+                        print(f"  â ï¸  WARNING: Take Profit is NULL")
                     
                     # Verify storage
                     try:
@@ -1733,11 +1737,11 @@ class TradingAgent:
                         stored_trade = next((t for t in stored_trade if t.get('trade_id') == order_id), None)
                         if stored_trade:
                             if stored_trade.get('stop_loss') != stop_loss:
-                                print(f"  ❌ CRITICAL: Stop loss mismatch! Stored: {stored_trade.get('stop_loss')}, Expected: {stop_loss}")
+                                print(f"  â CRITICAL: Stop loss mismatch! Stored: {stored_trade.get('stop_loss')}, Expected: {stop_loss}")
                             if stored_trade.get('take_profit') != take_profit:
-                                print(f"  ❌ CRITICAL: Take profit mismatch! Stored: {stored_trade.get('take_profit')}, Expected: {take_profit}")
+                                print(f"  â CRITICAL: Take profit mismatch! Stored: {stored_trade.get('take_profit')}, Expected: {take_profit}")
                     except Exception as verify_error:
-                        print(f"  ⚠️  Could not verify storage: {verify_error}")
+                        print(f"  â ï¸  Could not verify storage: {verify_error}")
                 
                 trade_log = {
                     'symbol': symbol,
@@ -1757,7 +1761,7 @@ class TradingAgent:
                     trade_log['drl_confidence'] = decision.get('drl_confidence')
                 
                 self.logger.log_trade(trade_log)
-                print(f"  ✅✅✅ Trade EXECUTED successfully!")
+                print(f"  âââ Trade EXECUTED successfully!")
                 print(f"     Order ID: {order_id}")
                 print(f"     {symbol} {side.value if hasattr(side, 'value') else side} {quantity} @ ${entry_price:.2f}")
                 
@@ -1766,7 +1770,7 @@ class TradingAgent:
                     self.performance_tracker.record_trade(trade_log)
             else:
                 # Failed order - still store for tracking (marked as rejected)
-                print(f"  ❌ Trade FAILED: No order_id returned")
+                print(f"  â Trade FAILED: No order_id returned")
                 print(f"     Order result: {order_result}")
                 error_msg = error_msg or order_result.get('error', 'Unknown error')
                 print(f"     Error: {error_msg}")
@@ -1786,7 +1790,7 @@ class TradingAgent:
                 
                 stored_id = self.storage.store_trade(failed_trade_data)
                 if stored_id:
-                    print(f"  📝 Failed trade attempt stored in database for tracking")
+                    print(f"  ð Failed trade attempt stored in database for tracking")
                 
                 self.logger.log_error(Exception(f"Trade execution failed: {error_msg}"), {
                     'symbol': symbol,
@@ -1798,7 +1802,7 @@ class TradingAgent:
                 })
         
         except Exception as e:
-            print(f"  ❌❌❌ EXCEPTION in _execute_trade: {e}")
+            print(f"  âââ EXCEPTION in _execute_trade: {e}")
             import traceback
             print(f"  Traceback: {traceback.format_exc()}")
             self.logger.log_error(e, {'symbol': symbol, 'action': 'execute_trade'})
@@ -1880,9 +1884,9 @@ class TradingAgent:
                             'exit_time': datetime.now(),
                             'pnl': final_pnl
                         })
-                        print(f"🧹 Cleaned up stale position: {symbol} (not found in broker, marked as closed, P&L: ${final_pnl:.2f})")
+                        print(f"ð§¹ Cleaned up stale position: {symbol} (not found in broker, marked as closed, P&L: ${final_pnl:.2f})")
                     except Exception as cleanup_error:
-                        print(f"⚠️  Error cleaning up position {symbol}: {cleanup_error}")
+                        print(f"â ï¸  Error cleaning up position {symbol}: {cleanup_error}")
                         # Keep position in list if cleanup failed
                         cleaned_positions.append(position)
                 else:
@@ -1973,9 +1977,9 @@ class TradingAgent:
                         # Update database with emergency stop loss
                         try:
                             self.storage.update_trade(trade_id, {'stop_loss': stop_loss})
-                            print(f"  ⚠️  EMERGENCY: Set default stop loss for {symbol}: ${stop_loss:.2f} (2% default)")
+                            print(f"  â ï¸  EMERGENCY: Set default stop loss for {symbol}: ${stop_loss:.2f} (2% default)")
                         except Exception as e:
-                            print(f"  ❌ Error setting emergency stop loss: {e}")
+                            print(f"  â Error setting emergency stop loss: {e}")
                     
                     # EMERGENCY FIX: Set default take profit if missing (1:3 risk/reward - updated from 1:2)
                     if not take_profit and stop_loss:
@@ -1990,9 +1994,9 @@ class TradingAgent:
                             # Update database with emergency take profit
                             try:
                                 self.storage.update_trade(trade_id, {'take_profit': take_profit})
-                                print(f"  ⚠️  EMERGENCY: Set default take profit for {symbol}: ${take_profit:.2f} (1:3 R/R)")
+                                print(f"  â ï¸  EMERGENCY: Set default take profit for {symbol}: ${take_profit:.2f} (1:3 R/R)")
                             except Exception as e:
-                                print(f"  ❌ Error setting emergency take profit: {e}")
+                                print(f"  â Error setting emergency take profit: {e}")
                     
                     # Get current price - use appropriate broker for symbol type
                     current_price = entry_price  # Default fallback
@@ -2044,13 +2048,13 @@ class TradingAgent:
                     # Log position status (every check for monitoring)
                     sl_str = f"${stop_loss:.2f}" if stop_loss else 'None'
                     tp_str = f"${take_profit:.2f}" if take_profit else 'None'
-                    print(f"  📊 Position {symbol}: Price ${current_price:.2f} | Entry ${entry_price:.2f} | P&L ${current_pnl:.2f} ({pnl_percent:+.2f}%) | SL {sl_str} | TP {tp_str}")
+                    print(f"  ð Position {symbol}: Price ${current_price:.2f} | Entry ${entry_price:.2f} | P&L ${current_pnl:.2f} ({pnl_percent:+.2f}%) | SL {sl_str} | TP {tp_str}")
                     
                     if stop_loss:
                         if self.stop_loss_manager.check_stop_loss(current_price, stop_loss, side):
                             should_close = True
                             close_reason = 'stop_loss'
-                            print(f"  🛑 STOP LOSS TRIGGERED for {symbol}:")
+                            print(f"  ð STOP LOSS TRIGGERED for {symbol}:")
                             print(f"     Current Price: ${current_price:.2f}")
                             print(f"     Stop Loss: ${stop_loss:.2f}")
                             print(f"     Entry Price: ${entry_price:.2f}")
@@ -2063,7 +2067,7 @@ class TradingAgent:
                         if side == 'buy' and current_price >= take_profit:
                             should_close = True
                             close_reason = 'take_profit'
-                            print(f"  🎯 TAKE PROFIT TRIGGERED for {symbol}:")
+                            print(f"  ð¯ TAKE PROFIT TRIGGERED for {symbol}:")
                             print(f"     Current Price: ${current_price:.2f}")
                             print(f"     Take Profit: ${take_profit:.2f}")
                             print(f"     Entry Price: ${entry_price:.2f}")
@@ -2073,7 +2077,7 @@ class TradingAgent:
                         elif side == 'sell' and current_price <= take_profit:
                             should_close = True
                             close_reason = 'take_profit'
-                            print(f"  🎯 TAKE PROFIT TRIGGERED for {symbol}:")
+                            print(f"  ð¯ TAKE PROFIT TRIGGERED for {symbol}:")
                             print(f"     Current Price: ${current_price:.2f}")
                             print(f"     Take Profit: ${take_profit:.2f}")
                             print(f"     Entry Price: ${entry_price:.2f}")
@@ -2084,7 +2088,7 @@ class TradingAgent:
                     # Debug logging for crypto positions (show current status)
                     if is_crypto and (stop_loss or take_profit):
                         if not should_close:
-                            status_msg = f"  📊 Monitoring {symbol}: Price ${current_price:.2f}"
+                            status_msg = f"  ð Monitoring {symbol}: Price ${current_price:.2f}"
                             if stop_loss:
                                 sl_diff = ((current_price - stop_loss) / stop_loss * 100) if side == 'buy' else ((stop_loss - current_price) / stop_loss * 100)
                                 status_msg += f", Stop-loss ${stop_loss:.2f} ({sl_diff:+.2f}%)"
@@ -2176,11 +2180,11 @@ class TradingAgent:
                                         'reason': close_reason,
                                         'pnl': final_pnl
                                     }, event='position_closed')
-                                    print(f"✅ Position closed: {symbol} {side} @ ${current_price:.2f} - {close_reason} (P&L: ${final_pnl:.2f})")
+                                    print(f"â Position closed: {symbol} {side} @ ${current_price:.2f} - {close_reason} (P&L: ${final_pnl:.2f})")
                                 else:
                                     # Position not found in broker - likely already closed
                                     # Mark as closed in database to keep it in sync
-                                    print(f"⚠️  Position {symbol} not found in broker - marking as closed in database (likely already closed)")
+                                    print(f"â ï¸  Position {symbol} not found in broker - marking as closed in database (likely already closed)")
                                     try:
                                         # Calculate final P&L based on current price
                                         if side == 'buy':
@@ -2194,10 +2198,10 @@ class TradingAgent:
                                             'exit_time': datetime.now(),
                                             'pnl': final_pnl
                                         })
-                                        print(f"✅ Marked position {symbol} as closed in database (P&L: ${final_pnl:.2f})")
+                                        print(f"â Marked position {symbol} as closed in database (P&L: ${final_pnl:.2f})")
                                     except Exception as db_error:
-                                        print(f"❌ Failed to update database for {symbol}: {db_error}")
-                                    print(f"❌ Failed to close position {symbol} via broker API (reason: {close_reason})")
+                                        print(f"â Failed to update database for {symbol}: {db_error}")
+                                    print(f"â Failed to close position {symbol} via broker API (reason: {close_reason})")
                             except Exception as e:
                                 error_msg = str(e)
                                 print(f"[ERROR] Error closing position {symbol} (reason: {close_reason}): {error_msg}")
@@ -2222,7 +2226,7 @@ class TradingAgent:
                                 else:
                                     self.logger.log_error(e, {'symbol': symbol, 'action': 'close_position', 'reason': close_reason})
                         else:
-                            print(f"⚠️  No broker found to close position {symbol} (reason: {close_reason})")
+                            print(f"â ï¸  No broker found to close position {symbol} (reason: {close_reason})")
                     
                     # Update trailing stop if enabled and position is profitable
                     elif stop_loss and self.stop_loss_manager.trailing_stop_enabled:
@@ -2301,7 +2305,7 @@ class TradingAgent:
             take_profit = trade.get('take_profit')
             
             if not entry_price or entry_price <= 0:
-                print(f"  ⚠️  {symbol}: Skipping (invalid entry_price: {entry_price})")
+                print(f"  â ï¸  {symbol}: Skipping (invalid entry_price: {entry_price})")
                 continue
             
             # Determine asset class from symbol or broker
@@ -2317,7 +2321,7 @@ class TradingAgent:
             if not stop_loss or stop_loss <= 0:
                 try:
                     # Fetch market data for ATR calculation
-                    print(f"  📊 {symbol}: Fetching market data for ATR-based stop loss calculation...")
+                    print(f"  ð {symbol}: Fetching market data for ATR-based stop loss calculation...")
                     # Get broker for asset class
                     if asset_class == 'forex':
                         broker = self.brokers.get('forex') or self.brokers.get('oanda')
@@ -2329,7 +2333,7 @@ class TradingAgent:
                         broker = self.brokers.get(asset_class) or self.brokers.get('stocks')
                     
                     if not broker:
-                        print(f"  ⚠️  {symbol}: No broker available for {asset_class}, using emergency fallback")
+                        print(f"  â ï¸  {symbol}: No broker available for {asset_class}, using emergency fallback")
                         # Emergency fallback
                         if side == 'buy':
                             stop_loss = entry_price * 0.98
@@ -2368,11 +2372,11 @@ class TradingAgent:
                                 stop_loss = min(stop_loss, entry_price * 1.05)  # Max 5% loss for shorts
                             
                             risk_pct = abs((entry_price - stop_loss) / entry_price * 100)
-                            print(f"  ✅ {symbol}: Calculated ATR-based stop loss ${stop_loss:.2f} ({risk_pct:.2f}% risk)")
+                            print(f"  â {symbol}: Calculated ATR-based stop loss ${stop_loss:.2f} ({risk_pct:.2f}% risk)")
                             
                         except Exception as data_error:
-                            print(f"  ⚠️  {symbol}: Could not fetch data for ATR calculation: {data_error}")
-                            print(f"  ⚠️  {symbol}: Using emergency fallback (2% stop loss)")
+                            print(f"  â ï¸  {symbol}: Could not fetch data for ATR calculation: {data_error}")
+                            print(f"  â ï¸  {symbol}: Using emergency fallback (2% stop loss)")
                             # Emergency fallback if data fetch fails
                             if side == 'buy':
                                 stop_loss = entry_price * 0.98
@@ -2385,16 +2389,16 @@ class TradingAgent:
                         if success:
                             updated_sl_count += 1
                             if stop_loss == entry_price * 0.98 or stop_loss == entry_price * 1.02:
-                                print(f"  ⚠️  {symbol}: Set emergency stop loss ${stop_loss:.2f} (2% default)")
+                                print(f"  â ï¸  {symbol}: Set emergency stop loss ${stop_loss:.2f} (2% default)")
                             else:
-                                print(f"  ✅ {symbol}: Updated stop loss to ${stop_loss:.2f}")
+                                print(f"  â {symbol}: Updated stop loss to ${stop_loss:.2f}")
                         else:
-                            print(f"  ⚠️  {symbol}: Failed to update stop loss in database")
+                            print(f"  â ï¸  {symbol}: Failed to update stop loss in database")
                     except Exception as e:
-                        print(f"  ❌ {symbol}: Error updating stop loss: {e}")
+                        print(f"  â {symbol}: Error updating stop loss: {e}")
                         
                 except Exception as e:
-                    print(f"  ❌ {symbol}: Error calculating stop loss: {e}")
+                    print(f"  â {symbol}: Error calculating stop loss: {e}")
                     # Final emergency fallback
                     if side == 'buy':
                         stop_loss = entry_price * 0.98
@@ -2403,7 +2407,7 @@ class TradingAgent:
                     try:
                         self.storage.update_trade(trade_id, {'stop_loss': stop_loss})
                         updated_sl_count += 1
-                        print(f"  ⚠️  {symbol}: Set emergency stop loss ${stop_loss:.2f} (2% default)")
+                        print(f"  â ï¸  {symbol}: Set emergency stop loss ${stop_loss:.2f} (2% default)")
                     except:
                         pass
             
@@ -2428,15 +2432,15 @@ class TradingAgent:
                         success = self.storage.update_trade(trade_id, {'take_profit': take_profit})
                         if success:
                             updated_tp_count += 1
-                            print(f"  ✅ {symbol}: Set take profit ${take_profit:.2f} (1:{risk_reward_ratio:.1f} R/R)")
+                            print(f"  â {symbol}: Set take profit ${take_profit:.2f} (1:{risk_reward_ratio:.1f} R/R)")
                         else:
-                            print(f"  ⚠️  {symbol}: Failed to update take profit")
+                            print(f"  â ï¸  {symbol}: Failed to update take profit")
                     except Exception as e:
-                        print(f"  ❌ {symbol}: Error updating take profit: {e}")
+                        print(f"  â {symbol}: Error updating take profit: {e}")
                 else:
-                    print(f"  ⚠️  {symbol}: Cannot calculate take profit (stop loss equals entry price)")
+                    print(f"  â ï¸  {symbol}: Cannot calculate take profit (stop loss equals entry price)")
         
-        print(f"\n[STARTUP] ✅ Updated {updated_sl_count} positions with stop_loss, {updated_tp_count} positions with take_profit")
+        print(f"\n[STARTUP] â Updated {updated_sl_count} positions with stop_loss, {updated_tp_count} positions with take_profit")
     
     def _sync_positions_from_brokers(self):
         """Sync open positions and orders from all brokers to local database"""
@@ -2489,7 +2493,7 @@ class TradingAgent:
                         except Exception:
                             pass
 
-                        # FIFO-match BUY/SELL pairs per symbol → produce single closed trade records
+                        # FIFO-match BUY/SELL pairs per symbol â produce single closed trade records
                         for _sym, _sym_orders in orders_by_symbol.items():
                             _sym_orders.sort(key=lambda x: x.get('filled_at') or '')
                             _pending_buys  = _dq()  # opening long legs
@@ -2522,7 +2526,7 @@ class TradingAgent:
                                                 'strategy': f'{broker_name}_order_sync',
                                             }
                                             if self.storage.store_trade(_td):
-                                                print(f"    ✅ Synced SHORT {_sym}: ${_entry_p:.2f}→${_price:.2f} P&L ${_pnl:.2f}")
+                                                print(f"    â Synced SHORT {_sym}: ${_entry_p:.2f}â${_price:.2f} P&L ${_pnl:.2f}")
                                                 _existing_ids[_tid] = _td
                                     else:
                                         _pending_buys.append(_ord)
@@ -2547,7 +2551,7 @@ class TradingAgent:
                                                 'strategy': f'{broker_name}_order_sync',
                                             }
                                             if self.storage.store_trade(_td):
-                                                print(f"    ✅ Synced LONG  {_sym}: ${_entry_p:.2f}→${_price:.2f} P&L ${_pnl:.2f}")
+                                                print(f"    â Synced LONG  {_sym}: ${_entry_p:.2f}â${_price:.2f} P&L ${_pnl:.2f}")
                                                 _existing_ids[_tid] = _td
                                     else:
                                         _pending_sells.append(_ord)
@@ -2569,7 +2573,7 @@ class TradingAgent:
                                     'pnl': 0.0, 'strategy': f'{broker_name}_order_sync',
                                 }
                                 if self.storage.store_trade(_td):
-                                    print(f"    ✅ Synced {_side.upper()} {_sym}: ${_price:.2f} ({'open' if _still_open else 'closed/unmatched'})")
+                                    print(f"    â Synced {_side.upper()} {_sym}: ${_price:.2f} ({'open' if _still_open else 'closed/unmatched'})")
                                     _existing_ids[_tid] = _td
 
                     except Exception as e:
@@ -2785,9 +2789,9 @@ class TradingAgent:
                                     'is_smarttrader': might_be_smarttrader
                                 }, event='position_synced')
                                 if might_be_smarttrader:
-                                    print(f"✅ Synced {message} in {broker_name}: {symbol} {side} {quantity} @ {entry_price}")
+                                    print(f"â Synced {message} in {broker_name}: {symbol} {side} {quantity} @ {entry_price}")
                                 else:
-                                    print(f"⚠️  Found {message} in {broker_name}: {symbol} {side} {quantity} @ {entry_price}")
+                                    print(f"â ï¸  Found {message} in {broker_name}: {symbol} {side} {quantity} @ {entry_price}")
                 except Exception as e:
                     self.logger.log_error(e, {'broker': broker_name, 'action': 'sync_positions'})
         except Exception as e:
@@ -2813,7 +2817,7 @@ class TradingAgent:
             ]
 
             if not sync_trades:
-                print("  [Reconcile] No synced $0 P&L trades found — nothing to do")
+                print("  [Reconcile] No synced $0 P&L trades found â nothing to do")
                 return
 
             print(f"  [Reconcile] {len(sync_trades)} synced $0-P&L trades to process...")
@@ -2824,7 +2828,7 @@ class TradingAgent:
 
             matched = 0
             for symbol, trades in by_symbol.items():
-                # Sort by entry_time ascending (oldest first → FIFO)
+                # Sort by entry_time ascending (oldest first â FIFO)
                 trades.sort(key=lambda x: x.get('entry_time') or datetime.min)
 
                 pending_buys  = deque()
@@ -2853,7 +2857,7 @@ class TradingAgent:
                             # Remove the now-redundant BUY-close leg
                             self.storage.delete_trade(trade['trade_id'])
                             matched += 1
-                            print(f"    ↔ SHORT {symbol}: entry ${sell_p:.4f} → exit ${price:.4f} | P&L ${pnl:.2f}")
+                            print(f"    â SHORT {symbol}: entry ${sell_p:.4f} â exit ${price:.4f} | P&L ${pnl:.2f}")
                         else:
                             pending_buys.append(trade)
 
@@ -2875,16 +2879,38 @@ class TradingAgent:
                             # Remove the now-redundant SELL-close leg
                             self.storage.delete_trade(trade['trade_id'])
                             matched += 1
-                            print(f"    ↔ LONG  {symbol}: entry ${buy_p:.4f} → exit ${price:.4f} | P&L ${pnl:.2f}")
+                            print(f"    â LONG  {symbol}: entry ${buy_p:.4f} â exit ${price:.4f} | P&L ${pnl:.2f}")
                         else:
                             pending_sells.append(trade)
-                # Unmatched leftovers have no counterpart in the fetched window — leave as-is
+                # Unmatched leftovers have no counterpart in the fetched window â leave as-is
 
             print(f"  [Reconcile] Complete: {matched} trade pairs matched and P&L calculated")
         except Exception as e:
             print(f"  [Reconcile] Error: {e}")
             self.logger.log_error(e, {'component': 'reconcile_pnl'})
 
+
+    def _purge_zero_pnl_imports(self):
+        """Delete $0-P&L broker-sync trades that could not be FIFO-matched.
+        These are orphaned import legs (single-sided orders stored as 'buy'),
+        not real completed trades. Safe to delete — they have no real P&L."""
+        try:
+            all_trades = self.storage.get_all_trades(limit=5000)
+            to_purge = [
+                t for t in all_trades
+                if '_sync' in (t.get('strategy') or '')
+                and abs(float(t.get('pnl', 0) or 0)) < 0.0001
+            ]
+            count = len(to_purge)
+            if count == 0:
+                print("  [Purge] No $0-P&L import artifacts to remove")
+                return
+            for t in to_purge:
+                self.storage.delete_trade(t['trade_id'])
+            print(f"  [Purge] Deleted {count} unresolvable $0-P&L broker-sync artifacts")
+        except Exception as e:
+            print(f"  [Purge] Error: {e}")
+            self.logger.log_error(e, {'component': 'purge_zero_pnl'})
 
     def _cleanup_phantom_trades(self):
         """
@@ -2928,7 +2954,7 @@ class TradingAgent:
                                 'position': pos
                             })
                 except Exception as e:
-                    print(f"  ⚠️  Error getting positions from {broker_name}: {e}")
+                    print(f"  â ï¸  Error getting positions from {broker_name}: {e}")
                     continue
             
             # Check each database trade against broker positions
@@ -3023,16 +3049,16 @@ class TradingAgent:
                                 'exit_price': trade.get('entry_price', 0),  # Use entry price as exit (no better data)
                                 'pnl': trade.get('pnl', 0)  # Keep existing P&L
                             })
-                            print(f"      ✅ Marked as closed (age: {age_days:.1f} days)")
+                            print(f"      â Marked as closed (age: {age_days:.1f} days)")
                         except Exception as e:
-                            print(f"      ❌ Error marking trade as closed: {e}")
+                            print(f"      â Error marking trade as closed: {e}")
                     else:
-                        print(f"      ⚠️  Keeping open (recent trade, might be timing issue)")
+                        print(f"      â ï¸  Keeping open (recent trade, might be timing issue)")
             else:
-                print("  ✅ All database trades verified in brokers - no phantom trades found")
+                print("  â All database trades verified in brokers - no phantom trades found")
                 
         except Exception as e:
-            print(f"  ❌ Error during phantom trade cleanup: {e}")
+            print(f"  â Error during phantom trade cleanup: {e}")
             self.logger.log_error(e, {'component': 'phantom_trade_cleanup'})
     
     def _update_dashboard(self):

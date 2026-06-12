@@ -800,12 +800,12 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
     def period_row(label, data):
         d = periods.get(data, {})
         wr = d.get('win_rate', 0)
-        pnl = d.get('pnl', d.get('net_profit', 0))
-        trades = d.get('total_trades', d.get('winning_trades',0) + d.get('losing_trades',0))
+        pnl = d.get('profit', d.get('pnl', d.get('net_profit', 0)))
+        trades = d.get('trades', d.get('total_trades', d.get('winning_trades',0) + d.get('losing_trades',0)))
         pf = d.get('profit_factor', 0)
         sign = '+' if pnl >= 0 else ''
         clr = 'pos' if pnl >= 0 else 'neg'
-        return (f'<tr><td>{label}</td><td>{trades}</td>' f'<td><span class="{clr}">{sign}${pnl:.2f}</span></td>' f'<td>{wr:.1f}%</td><td>{pf:.2f}</td></tr>')
+        return (f'<tr id="period-{data}"><td>{label}</td><td>{trades}</td>' f'<td><span class="{clr}">{sign}${pnl:.2f}</span></td>' f'<td>{wr:.1f}%</td><td>{pf:.2f}</td></tr>')
 
     periods_html = period_row('Today','today') + period_row('This Week','week') + period_row('This Month','month') + period_row('This Year','year') + period_row('All Time','all')
 
@@ -856,7 +856,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
 body{{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.5}}
 a{{color:var(--blue);text-decoration:none}}
 
-/* ── Topbar ── */
+/* ââ Topbar ââ */
 .topbar{{
   background:var(--surface);border-bottom:1px solid var(--border);
   padding:0 24px;height:56px;display:flex;align-items:center;
@@ -886,10 +886,10 @@ a{{color:var(--blue);text-decoration:none}}
 }}
 .btn-sm:hover{{border-color:var(--border2);color:var(--text)}}
 
-/* ── Layout ── */
+/* ââ Layout ââ */
 .main{{padding:24px;max-width:1440px;margin:0 auto}}
 
-/* ── Tabs ── */
+/* ââ Tabs ââ */
 .tab-nav{{
   display:flex;gap:2px;background:var(--surface);border:1px solid var(--border);
   border-radius:9px;padding:3px;width:fit-content;margin-bottom:24px;
@@ -903,7 +903,7 @@ a{{color:var(--blue);text-decoration:none}}
 .tab-btn.active{{background:var(--surface2);color:var(--blue);box-shadow:0 1px 4px rgba(0,0,0,.4)}}
 .tab-pane{{display:none}}.tab-pane.active{{display:block}}
 
-/* ── Cards ── */
+/* ââ Cards ââ */
 .card{{
   background:var(--surface);border:1px solid var(--border);
   border-radius:var(--radius);padding:20px 24px;margin-bottom:20px;
@@ -915,7 +915,7 @@ a{{color:var(--blue);text-decoration:none}}
 }}
 .card-hdr span{{font-weight:400;font-size:11px;text-transform:none;letter-spacing:0}}
 
-/* ── Metric grid ── */
+/* ââ Metric grid ââ */
 .mrow{{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:14px}}
 @media(max-width:1100px){{.mrow{{grid-template-columns:repeat(3,1fr)}}}}
 @media(max-width:640px){{.mrow{{grid-template-columns:repeat(2,1fr)}}}}
@@ -930,11 +930,11 @@ a{{color:var(--blue);text-decoration:none}}
 .pos{{color:var(--pos)!important}}.neg{{color:var(--neg)!important}}.warn{{color:var(--warn)!important}}
 .muted{{color:var(--text2)!important}}
 
-/* ── 2-col ── */
+/* ââ 2-col ââ */
 .grid2{{display:grid;grid-template-columns:2fr 1fr;gap:20px}}
 @media(max-width:1024px){{.grid2{{grid-template-columns:1fr}}}}
 
-/* ── Tables ── */
+/* ââ Tables ââ */
 .tbl-wrap{{overflow-x:auto}}
 table{{width:100%;border-collapse:collapse;font-size:13px}}
 thead th{{
@@ -949,7 +949,7 @@ tbody tr:last-child{{border-bottom:none}}
 .sym{{font-weight:600;font-size:13px}}
 .mono{{font-variant-numeric:tabular-nums;font-size:13px}}
 
-/* ── Badges ── */
+/* ââ Badges ââ */
 .badge{{
   display:inline-flex;align-items:center;gap:4px;
   padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;
@@ -963,7 +963,7 @@ tbody tr:last-child{{border-bottom:none}}
 /* P&L colors in tables */
 .ppos{{color:var(--pos);font-weight:600}}.pneg{{color:var(--neg);font-weight:600}}.pzero{{color:var(--text3)}}
 
-/* ── Close btn ── */
+/* ââ Close btn ââ */
 .btn-close-pos{{
   background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);
   color:var(--neg);padding:4px 12px;border-radius:6px;cursor:pointer;
@@ -972,10 +972,10 @@ tbody tr:last-child{{border-bottom:none}}
 .btn-close-pos:hover{{background:rgba(255,77,109,.16)}}
 .btn-close-pos:disabled{{opacity:.35;cursor:not-allowed}}
 
-/* ── Chart ── */
+/* ââ Chart ââ */
 .chart-wrap{{position:relative;height:230px}}
 
-/* ── Info banner ── */
+/* ââ Info banner ââ */
 .info-banner{{
   background:rgba(77,171,247,.06);border:1px solid rgba(77,171,247,.18);
   border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text2);
@@ -983,7 +983,7 @@ tbody tr:last-child{{border-bottom:none}}
 }}
 .info-banner .ib-icon{{color:var(--blue);font-size:14px;flex-shrink:0;margin-top:1px}}
 
-/* ── Reports tab ── */
+/* ââ Reports tab ââ */
 .rpt-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}}
 @media(max-width:900px){{.rpt-grid{{grid-template-columns:repeat(2,1fr)}}}}
 .rpt-card{{
@@ -998,7 +998,7 @@ tbody tr:last-child{{border-bottom:none}}
 .rpt-tbl tbody tr:hover{{background:rgba(31,45,70,.4)}}
 .chart-wrap2{{position:relative;height:280px}}
 
-/* ── Scrollbar ── */
+/* ââ Scrollbar ââ */
 ::-webkit-scrollbar{{width:5px;height:5px}}
 ::-webkit-scrollbar-track{{background:var(--bg)}}
 ::-webkit-scrollbar-thumb{{background:var(--border2);border-radius:3px}}
@@ -1007,47 +1007,47 @@ tbody tr:last-child{{border-bottom:none}}
 </head>
 <body>
 
-<!-- ── Top bar ── -->
+<!-- ââ Top bar ââ -->
 <header class="topbar">
   <div class="logo">
-    <div class="logo-glyph">◈</div>
+    <div class="logo-glyph">â</div>
     SmartTrader
   </div>
   <div class="live-pill"><div class="live-dot"></div>LIVE</div>
   <div class="topbar-right">
-    <button class="btn-sm" onclick="refreshData()">↻ Refresh</button>
-    <span id="lastUpdate">Connecting…</span>
+    <button class="btn-sm" onclick="refreshData()">â» Refresh</button>
+    <span id="lastUpdate">Connectingâ¦</span>
   </div>
 </header>
 
 <main class="main">
 
-<!-- ── Tab nav ── -->
+<!-- ââ Tab nav ââ -->
 <div class="tab-nav">
-  <button class="tab-btn active" onclick="switchTab('dashboard',this)">📊 Dashboard</button>
-  <button class="tab-btn" onclick="switchTab('reports',this)">📈 Reports</button>
+  <button class="tab-btn active" onclick="switchTab('dashboard',this)">ð Dashboard</button>
+  <button class="tab-btn" onclick="switchTab('reports',this)">ð Reports</button>
 </div>
 
-<!-- ═══════════════════════════════════════════════════ DASHBOARD TAB ═══ -->
+<!-- âââââââââââââââââââââââââââââââââââââââââââââââââââ DASHBOARD TAB âââ -->
 <div id="tab-dashboard" class="tab-pane active">
 
   <!-- Row 1: Core financials -->
   <div class="mrow">
-    <div class="mc"><div class="mc-lbl">Equity</div><div class="mc-val" id="mEquity">—</div></div>
-    <div class="mc"><div class="mc-lbl">Balance</div><div class="mc-val" id="mBalance">—</div></div>
-    <div class="mc"><div class="mc-lbl">Total Return</div><div class="mc-val" id="mTotalReturn">—</div></div>
-    <div class="mc"><div class="mc-lbl">Realized P&amp;L</div><div class="mc-val" id="mRealizedPnl">—</div></div>
-    <div class="mc"><div class="mc-lbl">Unrealized P&amp;L</div><div class="mc-val" id="mUnrealizedPnl">—</div></div>
-    <div class="mc"><div class="mc-lbl">Sharpe Ratio</div><div class="mc-val" id="mSharpe">—</div></div>
+    <div class="mc"><div class="mc-lbl">Equity</div><div class="mc-val" id="mEquity">â</div></div>
+    <div class="mc"><div class="mc-lbl">Balance</div><div class="mc-val" id="mBalance">â</div></div>
+    <div class="mc"><div class="mc-lbl">Total Return</div><div class="mc-val" id="mTotalReturn">â</div></div>
+    <div class="mc"><div class="mc-lbl">Realized P&amp;L</div><div class="mc-val" id="mRealizedPnl">â</div></div>
+    <div class="mc"><div class="mc-lbl">Unrealized P&amp;L</div><div class="mc-val" id="mUnrealizedPnl">â</div></div>
+    <div class="mc"><div class="mc-lbl">Sharpe Ratio</div><div class="mc-val" id="mSharpe">â</div></div>
   </div>
   <!-- Row 2: Trade stats -->
   <div class="mrow">
-    <div class="mc" id="mcWin"><div class="mc-lbl">Win Rate</div><div class="mc-val" id="mWinRate">—</div></div>
-    <div class="mc" id="mcLoss"><div class="mc-lbl">Loss Rate</div><div class="mc-val" id="mLossRate">—</div></div>
-    <div class="mc"><div class="mc-lbl">Total Trades</div><div class="mc-val" id="mTrades">—</div></div>
-    <div class="mc"><div class="mc-lbl">Profit Factor</div><div class="mc-val" id="mPF">—</div></div>
-    <div class="mc"><div class="mc-lbl">Expectancy</div><div class="mc-val" id="mExpectancy">—</div></div>
-    <div class="mc"><div class="mc-lbl">Data Integrity</div><div class="mc-val" id="mIntegrity">—</div></div>
+    <div class="mc" id="mcWin"><div class="mc-lbl">Win Rate</div><div class="mc-val" id="mWinRate">â</div></div>
+    <div class="mc" id="mcLoss"><div class="mc-lbl">Loss Rate</div><div class="mc-val" id="mLossRate">â</div></div>
+    <div class="mc"><div class="mc-lbl">Total Trades</div><div class="mc-val" id="mTrades">â</div></div>
+    <div class="mc"><div class="mc-lbl">Profit Factor</div><div class="mc-val" id="mPF">â</div></div>
+    <div class="mc"><div class="mc-lbl">Expectancy</div><div class="mc-val" id="mExpectancy">â</div></div>
+    <div class="mc"><div class="mc-lbl">Data Integrity</div><div class="mc-val" id="mIntegrity">â</div></div>
   </div>
 
   <!-- Positions + Chart -->
@@ -1057,7 +1057,7 @@ tbody tr:last-child{{border-bottom:none}}
       <div class="tbl-wrap">
         <table>
           <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Current</th><th>P&amp;L</th><th></th></tr></thead>
-          <tbody id="posBody"><tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text3)">Loading…</td></tr></tbody>
+          <tbody id="posBody"><tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text3)">Loadingâ¦</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1071,21 +1071,21 @@ tbody tr:last-child{{border-bottom:none}}
   <div class="card">
     <div class="card-hdr">Recent Trades <span>Last 50 trades</span></div>
     <div id="importedBanner" class="info-banner" style="display:none">
-      <span class="ib-icon">ℹ</span>
-      <div>Trades marked <strong>SYNCED</strong> were imported from your broker on startup — their P&amp;L shows <strong>$0.00</strong> because SmartTrader only calculates realized P&amp;L for trades it opens and closes itself.
+      <span class="ib-icon">â¹</span>
+      <div>Trades marked <strong>SYNCED</strong> were imported from your broker on startup â their P&amp;L shows <strong>$0.00</strong> because SmartTrader only calculates realized P&amp;L for trades it opens and closes itself.
       These do <em>not</em> count as wins or losses in performance statistics.</div>
     </div>
     <div class="tbl-wrap">
       <table>
         <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>P&amp;L</th><th>Source</th></tr></thead>
-        <tbody id="tradesBody"><tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text3)">Loading…</td></tr></tbody>
+        <tbody id="tradesBody"><tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text3)">Loadingâ¦</td></tr></tbody>
       </table>
     </div>
   </div>
 
 </div><!-- /dashboard -->
 
-<!-- ═══════════════════════════════════════════════════ REPORTS TAB ═══ -->
+<!-- âââââââââââââââââââââââââââââââââââââââââââââââââââ REPORTS TAB âââ -->
 <div id="tab-reports" class="tab-pane">
 
   <!-- Summary metrics -->
@@ -1145,7 +1145,7 @@ tbody tr:last-child{{border-bottom:none}}
 </main>
 
 <script>
-// ── Globals ──────────────────────────────────────────────────────────────────
+// ââ Globals ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 let miniChart=null, rptEquity=null, rptMonthly=null;
 const eqLabels = {json.dumps(equity_labels)};
 const eqValues = {json.dumps(equity_values)};
@@ -1154,7 +1154,7 @@ const mthLabels= {json.dumps(monthly_labels)};
 const mthGains = {json.dumps(monthly_gains)};
 const CS = Chart.defaults; CS.font.family = "'Inter',system-ui,sans-serif";
 
-// ── Tab switch ────────────────────────────────────────────────────────────────
+// ââ Tab switch ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -1163,15 +1163,15 @@ function switchTab(name, btn) {{
   if (name==='reports') initReportCharts();
 }}
 
-// ── Formatters ────────────────────────────────────────────────────────────────
-const fmt$ = n => n==null?'—':(n<0?'-$':'$')+Math.abs(n).toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}});
-const fmtPct = n => n==null?'—':(n>=0?'+':'')+parseFloat(n).toFixed(2)+'%';
-const fmtN = (n,d=2) => n==null?'—':parseFloat(n).toFixed(d);
+// ââ Formatters ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+const fmt$ = n => n==null?'â':(n<0?'-$':'$')+Math.abs(n).toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}});
+const fmtPct = n => n==null?'â':(n>=0?'+':'')+parseFloat(n).toFixed(2)+'%';
+const fmtN = (n,d=2) => n==null?'â':parseFloat(n).toFixed(d);
 function pClass(n) {{ return n>0.001?'ppos':n<-0.001?'pneg':'pzero'; }}
 function mClass(n) {{ return n>0.001?'pos':n<-0.001?'neg':''; }}
-function fmtDate(s) {{ if(!s) return '—'; const d=new Date(s); return isNaN(d)?s:d.toLocaleString(); }}
+function fmtDate(s) {{ if(!s) return 'â'; const d=new Date(s); return isNaN(d)?s:d.toLocaleString(); }}
 
-// ── Metric update ─────────────────────────────────────────────────────────────
+// ââ Metric update âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function setM(id,val,cls) {{ const el=document.getElementById(id); if(!el) return; el.textContent=val; el.className='mc-val '+(cls||''); }}
 
 function updateMetrics(data) {{
@@ -1201,17 +1201,17 @@ function updateMetrics(data) {{
   if (artifact) document.getElementById('importedBanner').style.display='flex';
 }}
 
-// ── Positions ──────────────────────────────────────────────────────────────────
+// ââ Positions ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function updatePositions(pos) {{
   const tb=document.getElementById('posBody');
   if (!pos||!pos.length) {{ tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text3)">No open positions</td></tr>'; return; }}
   tb.innerHTML=pos.map(p=>{{
-    const sym=p.symbol||'—', side=(p.side||'buy').toLowerCase();
+    const sym=p.symbol||'â', side=(p.side||'buy').toLowerCase();
     const qty=parseFloat(p.quantity||0).toLocaleString('en-US',{{maximumFractionDigits:4}});
-    const entry=p.entry_price?'$'+parseFloat(p.entry_price).toFixed(5):'—';
-    const cur=p.current_price?'$'+parseFloat(p.current_price).toFixed(5):'—';
+    const entry=p.entry_price?'$'+parseFloat(p.entry_price).toFixed(5):'â';
+    const cur=p.current_price?'$'+parseFloat(p.current_price).toFixed(5):'â';
     const pnl=parseFloat(p.pnl||0), tid=p.trade_id;
-    const warn=p.verified_at_broker===false?'⚠️ ':'';
+    const warn=p.verified_at_broker===false?'â ï¸ ':'';
     return `<tr>
       <td><span class="sym">${{warn}}${{sym}}</span></td>
       <td><span class="badge badge-${{side}}">${{side.toUpperCase()}}</span></td>
@@ -1224,15 +1224,15 @@ function updatePositions(pos) {{
   }}).join('');
 }}
 
-// ── Trades ────────────────────────────────────────────────────────────────────
+// ââ Trades ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function updateTrades(trades) {{
   const tb=document.getElementById('tradesBody');
   if (!trades||!trades.length) {{ tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text3)">No trades recorded</td></tr>'; return; }}
   let hasZero=false;
   tb.innerHTML=trades.map(t=>{{
-    const sym=t.symbol||'—', side=(t.side||'buy').toLowerCase();
+    const sym=t.symbol||'â', side=(t.side||'buy').toLowerCase();
     const qty=parseFloat(t.quantity||0).toLocaleString('en-US',{{maximumFractionDigits:4}});
-    const price=t.price?'$'+parseFloat(t.price).toFixed(2):'—';
+    const price=t.price?'$'+parseFloat(t.price).toFixed(2):'â';
     const pnl=parseFloat(t.pnl||0);
     const ts=fmtDate(t.exit_time||t.entry_time||t.timestamp);
     const synced=Math.abs(pnl)<0.001;
@@ -1250,10 +1250,15 @@ function updateTrades(trades) {{
   if(hasZero) document.getElementById('importedBanner').style.display='flex';
 }}
 
-// ── Mini equity chart ─────────────────────────────────────────────────────────
+// ââ Mini equity chart âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function initMiniChart(labels, values) {{
   const ctx=document.getElementById('miniChart'); if(!ctx) return;
-  if(miniChart) miniChart.destroy();
+  if(miniChart) {{
+    miniChart.data.labels=labels;
+    miniChart.data.datasets[0].data=values;
+    miniChart.update('none');
+    return;
+  }}
   miniChart=new Chart(ctx,{{
     type:'line',
     data:{{labels,datasets:[{{
@@ -1278,7 +1283,7 @@ function initMiniChart(labels, values) {{
   }});
 }}
 
-// ── Report charts (lazy) ─────────────────────────────────────────────────────
+// ââ Report charts (lazy) âââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function initReportCharts() {{
   if (!rptEquity) {{
     const ctx=document.getElementById('rptEquityChart'); if(!ctx) return;
@@ -1321,7 +1326,7 @@ function initReportCharts() {{
   }}
 }}
 
-// ── API / WebSocket ────────────────────────────────────────────────────────────
+// ââ API / WebSocket ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function refreshData() {{
   try {{
     const r=await fetch('/api/dashboard'); if(!r.ok) return;
@@ -1337,6 +1342,33 @@ function handleData(data) {{
   if (data.report&&data.report.equity_curve&&data.report.equity_curve.length>1) {{
     const pts=data.report.equity_curve.slice(-120);
     initMiniChart(pts.map(p=>(p.date||'').toString().slice(0,10)), pts.map(p=>parseFloat(p.equity||0)));
+    if (rptEquity) {{
+      rptEquity.data.labels=pts.map(p=>(p.date||'').toString().slice(0,10));
+      rptEquity.data.datasets[0].data=pts.map(p=>parseFloat(p.equity||0));
+      rptEquity.data.datasets[1].data=pts.map(p=>parseFloat(p.drawdown||0));
+      rptEquity.update('none');
+    }}
+  }}
+  if (data.report&&data.report.periods) {{
+    const per=data.report.periods;
+    [['today'],['week'],['month'],['year'],['all']].forEach(([k])=>{{
+      const row=document.getElementById('period-'+k);
+      if (!row||!per[k]) return;
+      const d=per[k];
+      const pnl=parseFloat(d.profit||d.pnl||d.net_profit||0);
+      const trades=parseInt(d.trades||d.total_trades||0);
+      const wr=parseFloat(d.win_rate||0);
+      const pf=parseFloat(d.profit_factor||0);
+      const sign=pnl>=0?'+':'';
+      const clr=pnl>=0?'pos':'neg';
+      const cells=row.querySelectorAll('td');
+      if(cells.length>=5){{
+        cells[1].textContent=trades;
+        cells[2].innerHTML='<span class="'+clr+'">'+sign+'$'+pnl.toFixed(2)+'</span>';
+        cells[3].textContent=wr.toFixed(1)+'%';
+        cells[4].textContent=pf.toFixed(2);
+      }}
+    }});
   }}
 }}
 
@@ -1357,12 +1389,12 @@ function connectWS() {{
   ws.onopen=()=>{{ wsRetries=0; document.getElementById('lastUpdate').textContent='Connected'; }};
   ws.onmessage=e=>{{ try{{handleData(JSON.parse(e.data))}}catch(ex){{}} }};
   ws.onclose=()=>{{
-    wsRetries++; document.getElementById('lastUpdate').textContent='Reconnecting…';
+    wsRetries++; document.getElementById('lastUpdate').textContent='Reconnectingâ¦';
     setTimeout(connectWS, Math.min(wsRetries*2000,30000));
   }};
 }}
 
-// ── Bootstrap ──────────────────────────────────────────────────────────────────
+// ââ Bootstrap ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 initMiniChart(eqLabels, eqValues);
 connectWS();
 refreshData();
@@ -1540,7 +1572,7 @@ def _generate_reports_html(report_data: Dict) -> str:
     <body>
         <div class="container">
             <div class="header">
-                <h1>📊 SmartTrader Performance Reports</h1>
+                <h1>ð SmartTrader Performance Reports</h1>
                 <p>Comprehensive trading analytics and statistics</p>
             </div>
             
@@ -1551,7 +1583,7 @@ def _generate_reports_html(report_data: Dict) -> str:
             
             <!-- General Account Info -->
             <div class="card">
-                <h2>📈 General Account Information</h2>
+                <h2>ð General Account Information</h2>
                 <div class="metrics-grid">
                     <div class="metric">
                         <div class="metric-value {('positive' if general.get('net_profit', 0) >= 0 else 'negative')}">
@@ -1630,7 +1662,7 @@ def _generate_reports_html(report_data: Dict) -> str:
             
             <!-- Performance Chart -->
             <div class="card">
-                <h2>📊 Equity Curve</h2>
+                <h2>ð Equity Curve</h2>
                 <div class="tabs">
                     <button class="tab active" onclick="switchTab('equity')">Equity</button>
                     <button class="tab" onclick="switchTab('drawdown')">Drawdown</button>
@@ -1649,7 +1681,7 @@ def _generate_reports_html(report_data: Dict) -> str:
             
             <!-- Period Statistics -->
             <div class="card">
-                <h2>📅 Trading Periods</h2>
+                <h2>ð Trading Periods</h2>
                 <table>
                     <thead>
                         <tr>
@@ -1734,7 +1766,7 @@ def _generate_reports_html(report_data: Dict) -> str:
             
             <!-- Advanced Statistics -->
             <div class="card">
-                <h2>🔬 Advanced Statistics</h2>
+                <h2>ð¬ Advanced Statistics</h2>
                 <div class="metrics-grid">
                     <div class="metric">
                         <div class="metric-value neutral">
@@ -1778,7 +1810,7 @@ def _generate_reports_html(report_data: Dict) -> str:
             <!-- Monthly Analytics -->
             <div class="card">
                 <div style="display: flex; justify-content: flex-start; align-items: center; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px;">
-                    <h2 style="margin-bottom: 0; border-bottom: none; padding-right: 20px;">📆 Monthly Analytics</h2>
+                    <h2 style="margin-bottom: 0; border-bottom: none; padding-right: 20px;">ð Monthly Analytics</h2>
                     <div class="tabs" style="border-bottom: none; margin-bottom: 0;" id="monthly-tabs-reports">
                     </div>
                 </div>
