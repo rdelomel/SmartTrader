@@ -75,9 +75,12 @@ class AlpacaBroker(BaseBroker):
                 base_data_url = 'https://data.alpaca.markets/v2/stocks'
                 bars_url = f"{base_data_url}/{symbol}/bars"
 
+            # Alpaca crypto only supports *USD pairs — normalize USDT/USDC → USD
+            alpaca_symbol = symbol.replace('/USDT', '/USD').replace('/USDC', '/USD') if is_crypto else symbol
+
             params = {'timeframe': alpaca_tf, 'limit': periods}
             if is_crypto:
-                params['symbols'] = symbol
+                params['symbols'] = alpaca_symbol
             if start_date:
                 params['start'] = start_date.isoformat() + 'Z'
             if end_date:
@@ -88,7 +91,7 @@ class AlpacaBroker(BaseBroker):
             data = response.json()
 
             if is_crypto:
-                bars = data.get('bars', {}).get(symbol, [])
+                bars = data.get('bars', {}).get(alpaca_symbol, [])
             else:
                 bars = data.get('bars', [])
 
@@ -121,11 +124,13 @@ class AlpacaBroker(BaseBroker):
         try:
             is_crypto = '/' in symbol or (symbol.endswith('USD') and len(symbol) <= 7)
             if is_crypto:
+                # Alpaca only supports *USD pairs — normalize USDT/USDC → USD
+                alpaca_symbol = symbol.replace('/USDT', '/USD').replace('/USDC', '/USD')
                 url = f"https://data.alpaca.markets/v1beta3/crypto/us/latest/trades"
-                response = self.session.get(url, params={'symbols': symbol})
+                response = self.session.get(url, params={'symbols': alpaca_symbol})
                 response.raise_for_status()
                 data = response.json()
-                trade = data.get('trades', {}).get(symbol, {})
+                trade = data.get('trades', {}).get(alpaca_symbol, {})
                 return float(trade.get('p', 0))
             else:
                 url = f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest"
