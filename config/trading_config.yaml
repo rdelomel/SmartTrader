@@ -172,6 +172,64 @@ risk:
   kelly_fraction: 0.25               # Use 25% Kelly (conservative)
   max_correlated_positions: 2        # Don't hold >2 highly-correlated positions
 
+
+# ============================================================
+# Per-Asset-Class Strategy Configuration
+# These values override the global strategy defaults for each
+# asset type.  Passed into generate_signal(data, symbol) so
+# every symbol gets individually calibrated parameters.
+# ============================================================
+asset_class_strategy_config:
+
+  crypto:
+    min_confidence: 0.55         # Tighter than global 0.42 — crypto needs clear signals
+    consensus_threshold: 0.55
+    mean_reversion_enabled: false  # Never use mean reversion for crypto
+    stop_loss_atr_multiple: 1.5    # Crypto ATR is already wide; tighten the multiple
+    take_profit_rr_ratio: 2.5      # Higher reward target to offset volatile holding risk
+    trend_following:
+      use_ema: true                # EMA reacts faster to rapid crypto moves than SMA
+      fast_ma_period: 10           # Faster crossover for crypto (SMA 20 is too slow)
+      slow_ma_period: 25           # Faster slow MA (SMA 50 lags badly on crypto)
+      adx_min_trend: 30            # Only trade crypto when ADX signals a strong trend
+    momentum:
+      rsi_oversold: 25             # Crypto capitulation reaches deeper oversold levels
+      rsi_overbought: 75           # Crypto euphoria reaches higher overbought levels
+      min_momentum: 0.05           # 5% min — filters out normal 1-2% crypto noise
+
+  forex:
+    min_confidence: 0.50
+    consensus_threshold: 0.50
+    mean_reversion_enabled: true   # Forex ranges reliably; mean reversion is valid
+    stop_loss_atr_multiple: 1.5
+    take_profit_rr_ratio: 2.0
+    trend_following:
+      use_ema: true                # EMA still preferred over SMA for responsiveness
+      fast_ma_period: 10
+      slow_ma_period: 30           # Slightly slower than crypto; forex trends more cleanly
+      adx_min_trend: 20            # Lower bar; forex trends sustain longer
+    momentum:
+      rsi_oversold: 35             # Forex RSI extremes are less pronounced than crypto
+      rsi_overbought: 65
+      min_momentum: 0.005          # 0.5% min — forex moves in pips, not percent
+
+  stocks:
+    min_confidence: 0.48
+    consensus_threshold: 0.48
+    mean_reversion_enabled: true
+    stop_loss_atr_multiple: 2.0
+    take_profit_rr_ratio: 2.0
+    trend_following:
+      use_ema: false               # SMA is fine for stocks; less whipsaw
+      fast_ma_period: 20
+      slow_ma_period: 50
+      adx_min_trend: 20
+    momentum:
+      rsi_oversold: 30
+      rsi_overbought: 70
+      min_momentum: 0.02           # 2% min — standard stock noise filter
+
+
 # Performance Gates (before enabling live trading)
 live_trading_gates:
   min_paper_trading_days: 60

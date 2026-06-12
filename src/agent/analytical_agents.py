@@ -113,7 +113,7 @@ class TechnicalAnalystAgent(BaseAgent):
         for strategy in self.strategies:
             if strategy.is_enabled():
                 try:
-                    signal = strategy.generate_signal(data)
+                    signal = strategy.generate_signal(data, symbol or "")
                     signals.append(signal)
                     weight = strategy.get_weight()
                     weights.append(weight)

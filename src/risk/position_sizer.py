@@ -304,20 +304,37 @@ class PositionSizer:
         account_balance: float,
         entry_price: float,
         stop_loss: float,
-        data: Optional[pd.DataFrame]
+        data
     ) -> float:
-        """Kelly Criterion position sizing (simplified)"""
-        # This is a simplified version
-        # Full Kelly requires win rate and average win/loss
-        
-        # For now, use conservative fractional Kelly (25%)
+        """
+        Risk-based position sizing scaled by Kelly fraction.
+
+        Previous implementation was BROKEN — it used:
+            quantity = (account_balance * 0.25) / entry_price
+        which completely ignored stop distance and sized positions at
+        25% of account regardless of risk.
+
+        Correct formula: size the position so that if the stop is hit,
+        you lose exactly (position_size_percent * kelly_fraction) % of
+        account balance.
+
+            risk_amount = account * position_size_pct/100 * kelly_fraction
+            quantity    = risk_amount / |entry - stop|
+
+        Example: $300k account, 1.5% risk, 0.25 Kelly, $2k BTC stop:
+            risk_amount = $300k * 0.015 * 0.25 = $1,125
+            quantity    = $1,125 / $2,000 = 0.5625 BTC (~$43k)
+            → capped by max_position_size_percent (4%) → $12k max
+        """
         risk_per_unit = abs(entry_price - stop_loss)
-        risk_amount = account_balance * (self.position_size_percent / 100)
-        
-        # Kelly fraction (simplified - assumes 50% win rate)
-        kelly_fraction = 0.25  # Conservative: 25% of full Kelly
-        
-        quantity = (account_balance * kelly_fraction) / entry_price
-        
+        if risk_per_unit == 0:
+            # No stop distance defined — fall back to fixed fractional (safety)
+            risk_amount = account_balance * (self.position_size_percent / 100)
+            return risk_amount / entry_price if entry_price > 0 else 0.0
+
+        kelly_fraction = self.config.get('kelly_fraction', 0.25)
+        # Base risk: what % of account are we willing to lose if stop hits
+        risk_amount = account_balance * (self.position_size_percent / 100) * kelly_fraction
+        quantity = risk_amount / risk_per_unit
         return quantity
 

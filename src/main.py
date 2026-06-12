@@ -433,11 +433,24 @@ class TradingAgent:
         """Initialize trading strategies"""
         strategies = []
         strategy_configs = self.trading_config.get('strategies', {})
+        # Build per-asset-class overrides from top-level config and inject into
+        # individual strategy configs so generate_signal() can pick them up.
+        ac_cfg = self.trading_config.get('asset_class_strategy_config', {})
+        asset_class_overrides = {
+            cls: {
+                **cfg.get('trend_following', {}),
+                **cfg.get('momentum', {}),
+                # Also expose top-level keys like stop_loss_atr_multiple, rsi_oversold, etc.
+                **{k: v for k, v in cfg.items() if not isinstance(v, dict)},
+            }
+            for cls, cfg in ac_cfg.items()
+        }
+
         
         # Trend following
         if strategy_configs.get('trend_following', {}).get('enabled', True):
             strategies.append(TrendFollowingStrategy(
-                strategy_configs.get('trend_following', {})
+                {**strategy_configs.get('trend_following', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Mean reversion
@@ -455,7 +468,7 @@ class TradingAgent:
         # Momentum
         if strategy_configs.get('momentum', {}).get('enabled', False):
             strategies.append(MomentumStrategy(
-                strategy_configs.get('momentum', {})
+                {**strategy_configs.get('momentum', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Volatility
@@ -801,6 +814,12 @@ class TradingAgent:
             daemon=True
         )
         dashboard_thread.start()
+
+        # Start high-frequency crypto stop/TP monitor (10-second intervals)
+        # This is separate from the 60-second main loop to prevent crypto stops
+        # being missed during price gaps between main-loop iterations.
+        self._start_crypto_monitor_thread()
+
         
         # Initial sync: Load existing positions from brokers and database on startup
         print("\n" + "="*60)
@@ -1807,6 +1826,137 @@ class TradingAgent:
             print(f"  Traceback: {traceback.format_exc()}")
             self.logger.log_error(e, {'symbol': symbol, 'action': 'execute_trade'})
     
+
+    # ----------------------------------------------------------------
+    # High-frequency crypto stop/TP monitor (10-second interval thread)
+    # Alpaca crypto does not support native bracket orders, so stops
+    # must be polled.  The main loop runs every 60 s which is far too
+    # slow for volatile crypto — this thread covers the gap.
+    # ----------------------------------------------------------------
+    def _start_crypto_monitor_thread(self):
+        """Start a dedicated 10-second stop/TP monitor for crypto positions."""
+        import threading
+        thread = threading.Thread(
+            target=self._crypto_stop_monitor_loop,
+            name='crypto-stop-monitor',
+            daemon=True
+        )
+        thread.start()
+        print('  [CryptoMonitor] Started 10-second crypto stop/TP monitoring thread')
+
+    def _crypto_stop_monitor_loop(self):
+        """Poll every 10 seconds and close crypto positions that hit SL or TP.
+
+        Runs in a daemon thread started at startup.  Does NOT generate new
+        signals — only monitors and closes existing open crypto positions.
+        """
+        CRYPTO_BASES = {
+            'BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'DOT', 'LINK',
+            'MATIC', 'AVAX', 'UNI', 'ATOM', 'XRP', 'DOGE', 'LTC'
+        }
+        POLL_INTERVAL = 10  # seconds
+
+        while self.running:
+            try:
+                if not self.storage:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+                open_positions = self.storage.get_open_trades()
+                crypto_pos = [
+                    p for p in open_positions
+                    if '/' in (p.get('symbol') or '')
+                    and (p.get('symbol') or '').split('/')[0].upper() in CRYPTO_BASES
+                    and (p.get('stop_loss') or p.get('take_profit'))
+                ]
+
+                if not crypto_pos:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+                # Get Alpaca broker
+                broker = None
+                for bname, b in self.brokers.items():
+                    if 'alpaca' in bname.lower() or bname == 'stocks':
+                        broker = b
+                        break
+                if not broker:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+                for position in crypto_pos:
+                    try:
+                        symbol   = position.get('symbol')
+                        side_raw = position.get('side', 'buy')
+                        side     = (side_raw.value.lower()
+                                    if hasattr(side_raw, 'value')
+                                    else str(side_raw).lower())
+                        entry_price = float(position.get('entry_price', 0) or 0)
+                        quantity    = float(position.get('quantity',    0) or 0)
+                        trade_id    = position.get('trade_id')
+
+                        if not symbol or quantity == 0 or entry_price == 0:
+                            continue
+
+                        try:
+                            stop_loss = float(position.get('stop_loss')) if position.get('stop_loss') else None
+                        except (ValueError, TypeError):
+                            stop_loss = None
+                        try:
+                            take_profit = float(position.get('take_profit')) if position.get('take_profit') else None
+                        except (ValueError, TypeError):
+                            take_profit = None
+
+                        # Fetch live price
+                        try:
+                            current_price = broker.get_current_price(symbol)
+                            if not current_price or current_price <= 0:
+                                continue
+                        except Exception:
+                            continue
+
+                        should_close = False
+                        close_reason = None
+
+                        if stop_loss and self.stop_loss_manager.check_stop_loss(
+                                current_price, stop_loss, side):
+                            should_close = True
+                            close_reason = 'stop_loss'
+
+                        if take_profit and not should_close:
+                            if side == 'buy' and current_price >= take_profit:
+                                should_close = True
+                                close_reason = 'take_profit'
+                            elif side == 'sell' and current_price <= take_profit:
+                                should_close = True
+                                close_reason = 'take_profit'
+
+                        if should_close:
+                            pnl = ((current_price - entry_price) * quantity
+                                   if side == 'buy'
+                                   else (entry_price - current_price) * quantity)
+                            print(f'  [CryptoMonitor] {close_reason.upper()} triggered '
+                                  f'{symbol}: ${current_price:.2f} | P&L ${pnl:.2f}')
+                            try:
+                                broker.close_position(symbol, quantity)
+                                self.storage.update_trade(trade_id, {
+                                    'status':      'closed',
+                                    'exit_price':  current_price,
+                                    'exit_time':   datetime.now(),
+                                    'pnl':         pnl,
+                                    'close_reason': close_reason,
+                                })
+                            except Exception as ce:
+                                print(f'  [CryptoMonitor] Error closing {symbol}: {ce}')
+
+                    except Exception:
+                        pass  # Never crash the monitor loop on a single position error
+
+            except Exception:
+                pass  # Never crash the monitor loop
+
+            time.sleep(POLL_INTERVAL)
+
     def _manage_open_positions(self):
         """
         Actively manage all open positions (including external synced trades)
