@@ -737,9 +737,8 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
             all_trades = app.storage.get_all_trades(limit=5000)
             to_purge = [
                 t for t in all_trades
-                if abs(float(t.get('pnl', 0) or 0)) < 0.01
-                and 'smarttrader' not in (t.get('strategy') or '').lower()
-                and 'smarttrader' not in (t.get('source') or '').lower()
+                if abs(float(t.get('pnl', 0) or 0)) < 0.001
+                and (t.get('status') or '').lower() not in ('open', 'pending', 'partial')
             ]
             count = len(to_purge)
             for t in to_purge:

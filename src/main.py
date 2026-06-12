@@ -1152,10 +1152,10 @@ class TradingAgent:
             print(f"  Position Size Info: {decision.get('position_size', {})}")
             
             # Check execution conditions
-            will_execute = (signal_value != Signal.HOLD and 
+            will_execute = (signal_value != Signal.HOLD and
                           confidence > min_conf and
-                          not is_vetoed)
-            
+                          not is_vetoed and
+                          not self.trading_config.get('signal_log_mode', False))
             if not will_execute:
                 if signal_value == Signal.HOLD:
                     reason = f'Signal is HOLD'
@@ -2898,9 +2898,8 @@ class TradingAgent:
             all_trades = self.storage.get_all_trades(limit=5000)
             to_purge = [
                 t for t in all_trades
-                if abs(float(t.get('pnl', 0) or 0)) < 0.01
-                and 'smarttrader' not in (t.get('strategy') or '').lower()
-                and 'smarttrader' not in (t.get('source') or '').lower()
+                if abs(float(t.get('pnl', 0) or 0)) < 0.001
+                and (t.get('status') or '').lower() not in ('open', 'pending', 'partial')
             ]
             count = len(to_purge)
             if count == 0:
