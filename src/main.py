@@ -728,32 +728,42 @@ class TradingAgent:
         Returns:
             True if within trading hours, False otherwise
         """
-        trading_hours_config = self.trading_config.get('trading_hours', {})
-        asset_config = trading_hours_config.get(asset_class, {})
-        
+        # Read from assets.<asset_class>.trading_hours (correct YAML path)
+        assets_config = self.trading_config.get('assets', {})
+        asset_config = assets_config.get(asset_class, {}).get('trading_hours', {})
+
         if not asset_config.get('enabled', True):
             return False
-        
+
         now = datetime.now()
         current_day = now.strftime('%A').lower()
         current_hour = now.hour
         current_minute = now.minute
-        
+
         # Commodities (precious metals) follow forex hours (24/5)
         if asset_class == 'commodities' and not asset_config:
             # Fallback to forex hours if commodities hours not configured
-            asset_config = trading_hours_config.get('forex', {})
-        
-        # Check if today is a trading day
-        allowed_days = [d.lower() if isinstance(d, str) else d for d in asset_config.get('days', [])]
+            asset_config = assets_config.get('forex', {}).get('trading_hours', {})
+
+        # Check if today is a trading day — key is 'allowed_days' (not 'days')
+        allowed_days = [d.lower() if isinstance(d, str) else str(d).lower() for d in asset_config.get('allowed_days', [])]
         print(f"  Trading hours check for {asset_class}: day={current_day}, allowed_days={allowed_days}")
         if current_day not in allowed_days:
             print(f"  ❌ Day {current_day} not in allowed days")
             return False
-        
-        # Check if within trading hours
-        start_hour = asset_config.get('start_hour', 0)
-        end_hour = asset_config.get('end_hour', 24)
+
+        # Parse start/end — supports both "HH:MM" strings and integer hours
+        def _parse_hour(val, default):
+            if isinstance(val, int):
+                return val
+            if isinstance(val, str) and ':' in val:
+                h, m = int(val.split(':')[0]), int(val.split(':')[1])
+                # "23:59" means end-of-day — treat as 24 (exclusive upper bound)
+                return 24 if (h == 23 and m == 59) else h
+            return default
+
+        start_hour = _parse_hour(asset_config.get('start', asset_config.get('start_hour', 0)), 0)
+        end_hour = _parse_hour(asset_config.get('end', asset_config.get('end_hour', 24)), 24)
         
         # For stocks, market opens at 13:30 UTC (9:30 AM EST), not 13:00
         # Config says start_hour: 13, but we need to check for 13:30
