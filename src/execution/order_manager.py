@@ -62,7 +62,7 @@ class OrderManager:
             # All trades go directly to Alpaca/OANDA/Binance APIs
             if not hasattr(self.broker, 'place_order'):
                 error_msg = 'Broker does not support place_order method'
-                print(f"  ❌ {error_msg}")
+                print(f"  â {error_msg}")
                 return {
                     'order_id': None,
                     'status': 'rejected',
@@ -71,14 +71,14 @@ class OrderManager:
             
             if not getattr(self.broker, 'connected', False):
                 error_msg = 'Broker is not connected'
-                print(f"  ❌ {error_msg}")
+                print(f"  â {error_msg}")
                 return {
                     'order_id': None,
                     'status': 'rejected',
                     'error': error_msg
                 }
             
-            print(f"  📤 Calling broker.place_order()...")
+            print(f"  ð¤ Calling broker.place_order()...")
             # Use broker API directly (works for both paper trading API and live trading)
             # Alpaca and OANDA paper trading APIs will show trades in their dashboards
             result = self.broker.place_order(
@@ -96,25 +96,25 @@ class OrderManager:
             # Store order
             if result.get('order_id'):
                 self.open_orders[result['order_id']] = result
-                print(f"  ✅ Order stored with ID: {result['order_id']}")
+                print(f"  â Order stored with ID: {result['order_id']}")
             else:
-                print(f"  ⚠️  No order_id in result")
+                print(f"  â ï¸  No order_id in result")
             
             # Log trade to database
             if result.get('status'):
                 status_value = result['status'].value if hasattr(result['status'], 'value') else str(result['status'])
                 print(f"  Order status: {status_value}")
                 if status_value in ['filled', 'FILLED']:
-                    print(f"  📝 Logging filled trade to database...")
-                    self._log_trade(result, symbol, side)
+                    print(f"  ð Logging filled trade to database...")
+                    self._log_trade(result, symbol, side, stop_loss=stop_loss, take_profit=take_profit)
             
             if result.get('error'):
-                print(f"  ❌ Order error: {result.get('error')}")
+                print(f"  â Order error: {result.get('error')}")
             
             return result
         except Exception as e:
             import traceback
-            print(f"  ❌❌❌ EXCEPTION in OrderManager.place_order: {e}")
+            print(f"  âââ EXCEPTION in OrderManager.place_order: {e}")
             print(f"  Traceback: {traceback.format_exc()}")
             return {
                 'order_id': None,
@@ -151,7 +151,7 @@ class OrderManager:
             print(f"Error closing position: {e}")
             return False
     
-    def _log_trade(self, order_result: Dict, symbol: str, side: OrderSide):
+    def _log_trade(self, order_result: Dict, symbol: str, side: OrderSide, stop_loss=None, take_profit=None):
         """Log trade to database"""
         try:
             trade_data = {
@@ -162,7 +162,9 @@ class OrderManager:
                 'entry_price': order_result.get('price', 0),
                 'entry_time': order_result.get('timestamp', datetime.now()),
                 'status': 'open',
-                'strategy': 'smarttrader'  # Mark as created by our system
+                'strategy': 'smarttrader',  # Mark as created by our system
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
             }
             
             self.storage.store_trade(trade_data)
