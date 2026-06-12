@@ -105,31 +105,34 @@ class TradingReporter:
                 'shorts_total': 0
             }
         
-        winning_trades = [t for t in closed_trades if t.get('pnl', 0) > 0]
-        losing_trades = [t for t in closed_trades if t.get('pnl', 0) < 0]   # Only true losses; P&L=0 (imported/unresolved) = break-even
+        # Exclude $0-P&L unresolved broker-sync imports from statistics
+        resolved_trades = [t for t in closed_trades if abs(t.get('pnl', 0) or 0) >= 0.001]
+        winning_trades = [t for t in resolved_trades if t.get('pnl', 0) > 0]
+        losing_trades = [t for t in resolved_trades if t.get('pnl', 0) < 0]  # True losses only (P&L < 0)
         
         total_profit = sum(t.get('pnl', 0) for t in winning_trades)
         total_loss = abs(sum(t.get('pnl', 0) for t in losing_trades))
         
-        longs = [t for t in closed_trades if t.get('side', '').lower() == 'buy']
-        shorts = [t for t in closed_trades if t.get('side', '').lower() == 'sell']
+        longs = [t for t in resolved_trades if t.get('side', '').lower() == 'buy']
+        shorts = [t for t in resolved_trades if t.get('side', '').lower() == 'sell']
         
         longs_won = len([t for t in longs if t.get('pnl', 0) > 0])
         shorts_won = len([t for t in shorts if t.get('pnl', 0) > 0])
         
         return {
-            'total_trades': len(closed_trades),
-            'win_rate': (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0.0,
-            'loss_rate': (len(losing_trades) / len(closed_trades) * 100) if closed_trades else 0.0,  # Now includes break-even trades
+            'total_trades': len(resolved_trades),   # Only resolved trades; use 'total_imported' for $0-P&L count
+            'win_rate': (len(winning_trades) / len(resolved_trades) * 100) if resolved_trades else 0.0,
+            'loss_rate': (len(losing_trades) / len(resolved_trades) * 100) if resolved_trades else 0.0,
             'total_profit': total_profit,
             'total_loss': total_loss,
             'net_profit': total_profit - total_loss,
             'profit_factor': total_profit / total_loss if total_loss > 0 else 0.0,
             'average_win': total_profit / len(winning_trades) if winning_trades else 0.0,
             'average_loss': total_loss / len(losing_trades) if losing_trades else 0.0,
-            'largest_win': max([t.get('pnl', 0) for t in closed_trades], default=0.0),
-            'largest_loss': min([t.get('pnl', 0) for t in closed_trades], default=0.0),
+            'largest_win': max([t.get('pnl', 0) for t in resolved_trades], default=0.0),
+            'largest_loss': min([t.get('pnl', 0) for t in resolved_trades], default=0.0),
             'longs_won': longs_won,
+            'total_imported': len(closed_trades) - len(resolved_trades),
             'longs_total': len(longs),
             'shorts_won': shorts_won,
             'shorts_total': len(shorts),
@@ -149,21 +152,22 @@ class TradingReporter:
                 'losing_trades': 0
             }
         
-        winning = [t for t in period_trades if t.get('pnl', 0) > 0]
-        losing = [t for t in period_trades if t.get('pnl', 0) <= 0]  # Include break-even (P&L = 0) in losses
+        # Exclude $0-P&L unresolved imports from period stats
+        eff = [t for t in period_trades if abs(t.get('pnl', 0) or 0) >= 0.001]
+        winning = [t for t in eff if t.get('pnl', 0) > 0]
+        losing  = [t for t in eff if t.get('pnl', 0) < 0]
         
-        profit = sum(t.get('pnl', 0) for t in period_trades)
+        profit = sum(t.get('pnl', 0) for t in eff)
         
-        # Calculate gain percentage (simplified - would need initial equity)
-        # For now, use profit as gain
-        gain_pct = 0.0  # Would need to calculate based on equity
+        # Calculate gain % vs initial equity
+        gain_pct = (profit / self.initial_equity * 100) if self.initial_equity else 0.0
         
         return {
             'gain': profit,
             'gain_pct': gain_pct,
             'profit': profit,
-            'trades': len(period_trades),
-            'win_rate': (len(winning) / len(period_trades) * 100) if period_trades else 0.0,
+            'trades': len(eff),
+            'win_rate': (len(winning) / len(eff) * 100) if eff else 0.0,
             'winning_trades': len(winning),
             'losing_trades': len(losing)
         }
@@ -180,7 +184,9 @@ class TradingReporter:
                 'expectancy': 0.0
             }
         
-        pnls = [t.get('pnl', 0) for t in closed_trades]
+        # Exclude $0-P&L unresolved imports from advanced stats
+        resolved = [t for t in closed_trades if abs(t.get('pnl', 0) or 0) >= 0.001]
+        pnls = [t.get('pnl', 0) for t in resolved]
         
         # Sharpe ratio (simplified)
         if len(pnls) > 1:
@@ -201,7 +207,7 @@ class TradingReporter:
         # Calculate equity curve for drawdown
         equity_curve = []
         running_equity = self.initial_equity  # Use actual initial equity
-        for trade in sorted(closed_trades, key=lambda x: self._parse_time(x.get('exit_time') or x.get('entry_time'))):
+        for trade in sorted(resolved, key=lambda x: self._parse_time(x.get('exit_time') or x.get('entry_time'))):
             running_equity += trade.get('pnl', 0)
             # Prevent negative equity (shouldn't happen, but safety check)
             running_equity = max(0.0, running_equity)
@@ -305,7 +311,10 @@ class TradingReporter:
             
             # Find starting equity for this month
             month_start_date = datetime.strptime(month_key, '%Y-%m')
-            prior_profit = sum(t.get('pnl', 0) for t in closed_trades if self._parse_time(t.get('exit_time') or t.get('entry_time')) < month_start_date)
+            # Exclude $0-P&L unresolved imports from equity base
+            prior_profit = sum(t.get('pnl', 0) for t in closed_trades
+                               if abs(t.get('pnl', 0) or 0) >= 0.001
+                               and self._parse_time(t.get('exit_time') or t.get('entry_time')) < month_start_date)
             starting_equity = self.initial_equity + prior_profit
             
             gain_pct = (data['profit'] / starting_equity * 100) if starting_equity > 0 else 0.0
