@@ -1,97 +1,97 @@
 # SmartTrader on TerraMaster TOS 6 — Docker Manager Guide
 
-This guide covers deploying SmartTrader using **TOS 6's built-in Docker Manager UI**.  
-No SSH. No Portainer. No docker-compose CLI. Pure GUI.
+Deploy SmartTrader using **TOS 6's built-in Docker Manager UI** — no SSH required
+after initial folder setup. All data lives in `~/SmartTrader/` (your home folder).
 
 ---
 
 ## Overview
 
 ```
-GitHub push → GitHub Actions builds image → pushes to Docker Hub
-                                                     ↓
-                              TOS 6 Docker Manager pulls image
-                                                     ↓
-                         Configure volumes + env vars via GUI
-                                                     ↓
-                                           Container running ✅
+GitHub push → GitHub Actions builds image → pushes to Docker Hub (private)
+                                                        ↓
+                   TOS 6 Docker Manager authenticates + pulls image
+                                                        ↓
+                           Volumes → ~/SmartTrader/{data,logs,models,config}
+                                                        ↓
+                                              Container running ✅
 ```
 
 ---
 
-## Part 1 — One-Time Setup (GitHub → Docker Hub)
+## Part 1 — One-Time Setup: GitHub → Docker Hub
 
-### 1.1 Create a Docker Hub account & access token
+### 1.1 Create Docker Hub account & access token
 
-1. Go to [hub.docker.com](https://hub.docker.com) and create a free account  
-   (use your username — e.g. `rdelomel`)
-2. Go to **Account Settings → Security → New Access Token**
-   - Description: `github-actions`
+1. Go to [hub.docker.com](https://hub.docker.com) — create a free account
+2. **Account Settings → Security → New Access Token**
+   - Name: `github-actions`
    - Permissions: **Read & Write**
-   - Copy the token (shown only once)
+   - **Copy the token** (shown only once)
 
-### 1.2 Add secrets to GitHub repo
+### 1.2 Add secrets to your GitHub repo
 
-1. Open [github.com/rdelomel/SmartTrader](https://github.com/rdelomel/SmartTrader)
-2. Go to **Settings → Secrets and variables → Actions → New repository secret**
-3. Add these two secrets:
+Go to [github.com/rdelomel/SmartTrader → Settings → Secrets → Actions](https://github.com/rdelomel/SmartTrader/settings/secrets/actions):
 
-   | Name | Value |
-   |------|-------|
-   | `DOCKERHUB_USERNAME` | your Docker Hub username (e.g. `rdelomel`) |
-   | `DOCKERHUB_TOKEN` | the token you just copied |
+| Secret name | Value |
+|------------|-------|
+| `DOCKERHUB_USERNAME` | your Docker Hub username (e.g. `rdelomel`) |
+| `DOCKERHUB_TOKEN` | the token you copied above |
 
-### 1.3 Trigger your first build
+### 1.3 Trigger the first build
 
-The workflow file is already committed. To trigger it:
-- Push any code change to `main`, **OR**
 - Go to **Actions → Build & Push Docker Image → Run workflow**
-
-The build takes ~10–15 minutes the first time (downloading PyTorch CPU wheels).  
-Subsequent builds are ~3–5 minutes thanks to layer caching.
-
-When complete you'll see the image at:  
-`https://hub.docker.com/r/rdelomel/smarttrader`
+- Takes ~12 min first time; ~3-5 min after that (layer cache)
+- When done: `hub.docker.com/r/rdelomel/smarttrader` shows the image
 
 ---
 
-## Part 2 — Create Folders on Your TerraMaster
+## Part 2 — Create SmartTrader Folder (Home Folder)
 
-Before pulling the image, create the persistent data folders.
+All persistent data lives in your home folder at `/root/SmartTrader/`.
+This is easy to find via TOS 6 File Manager — it's right in the root home.
 
-### Option A — TOS 6 File Manager (GUI)
+### Option A — TOS 6 File Manager (no SSH)
 
 1. Open **File Manager** in TOS 6
-2. Navigate to your main storage pool (e.g. `main`)
-3. Create the following folder structure:
+2. Navigate to **Home** (the home folder, usually shown as `Home` or `/root`)
+3. Create a folder named `SmartTrader`
+4. Inside it, create these subfolders:
 
 ```
-/mnt/main/docker/smarttrader/
-├── data/       ← SQLite trading database
-├── logs/       ← Application logs
-├── models/     ← Trained ML models
-├── config/     ← YAML config files (editable without rebuild)
-└── .env        ← Your API keys (create this file — see Part 3)
+~/SmartTrader/          (i.e. /root/SmartTrader/)
+├── data/               ← SQLite trading database
+├── logs/               ← Application logs  
+├── models/             ← Trained ML models
+├── config/             ← YAML config files (editable without rebuild)
+└── .env                ← Your API keys (create this — see Part 3)
 ```
 
-### Option B — SSH (faster)
+### Option B — SSH (30 seconds)
 
 ```bash
 ssh admin@YOUR-NAS-IP
-mkdir -p /mnt/main/docker/smarttrader/{data,logs,models,config}
+mkdir -p ~/SmartTrader/{data,logs,models,config}
+echo "Folders created at: $(ls ~/SmartTrader/)"
 ```
-
-> **Not sure of your pool name?**  
-> Run `ls /mnt/` via SSH — common names: `main`, `sda`, `Pool1`, `HDD_Pool`, `md0`
 
 ---
 
-## Part 3 — Create the .env File
+## Part 3 — Create Your .env File
 
-This file holds your API keys. It must exist **before** starting the container.
+This file holds your API keys and **never gets committed to GitHub**.
 
-Create `/mnt/main/docker/smarttrader/.env` with this content  
-(replace placeholder values with your real keys):
+Create `/root/SmartTrader/.env`:
+
+**Via SSH:**
+```bash
+nano ~/SmartTrader/.env
+```
+
+**Via TOS 6 File Manager:**  
+File Manager → Home → SmartTrader → New File → name it `.env` → Open with Text Editor
+
+**Paste this template and fill in your real keys:**
 
 ```env
 # ── Broker Credentials ──────────────────────────────────────────────────────
@@ -119,36 +119,59 @@ LOG_LEVEL=INFO
 TZ=Australia/Melbourne
 ```
 
-> ⚠️ **Security**: This file never gets committed to GitHub.  
-> It lives only on your NAS. Back it up to your password manager.
-
 ---
 
-## Part 4 — Pull Image via Docker Manager
+## Part 4 — Authenticate Docker Hub in Docker Manager
+
+> ⚠️ Your Docker Hub repo is **private** — TOS 6 must be logged in before pulling.
+
+### 4.1 Add Docker Hub credentials to Docker Manager
 
 1. Open **Docker Manager** in TOS 6
-2. Click the **Images** tab (left sidebar)
-3. Click **Add** or the **Search / Pull** button
-4. In the image search box type:
-   ```
-   rdelomel/smarttrader
-   ```
-5. Select tag **`latest`**
-6. Click **Pull** — wait for the download to complete (~800 MB)
+2. Go to **Settings** (or the gear icon) → **Registry** (or **Repositories**)
+3. Click **Add** registry
+4. Fill in:
 
-You'll see `rdelomel/smarttrader:latest` appear in your image list when done.
+   | Field | Value |
+   |-------|-------|
+   | Registry URL | `https://registry-1.docker.io` |
+   | Username | your Docker Hub username (e.g. `rdelomel`) |
+   | Password | your Docker Hub **access token** (same one from Part 1) |
+
+5. Click **Save** / **Test** — should show ✅ Connected
+
+> **Note:** If Docker Manager doesn't have a registry settings screen,  
+> use SSH to authenticate once and Docker Manager will reuse it:
+> ```bash
+> ssh admin@YOUR-NAS-IP
+> docker login
+> # Enter your Docker Hub username and access token when prompted
+> ```
 
 ---
 
-## Part 5 — Create & Configure the Container
+## Part 5 — Pull Image via Docker Manager
 
-### 5.1 Start the container wizard
+1. Open **Docker Manager** → **Images** tab
+2. Click **Add** or **Pull**
+3. Enter image name:
+   ```
+   rdelomel/smarttrader:latest
+   ```
+4. Click **Pull** — wait for download (~800 MB)
 
-1. In Docker Manager → **Containers** tab → Click **Create**
-2. Select image: `rdelomel/smarttrader:latest`
-3. Click **Next** / **Configure**
+When done, `rdelomel/smarttrader:latest` appears in your image list.
 
-### 5.2 Basic settings
+---
+
+## Part 6 — Create & Configure the Container
+
+### 6.1 Start the wizard
+
+Docker Manager → **Containers** tab → **Create**  
+Select image: `rdelomel/smarttrader:latest` → **Next**
+
+### 6.2 Basic settings
 
 | Setting | Value |
 |---------|-------|
@@ -156,42 +179,27 @@ You'll see `rdelomel/smarttrader:latest` appear in your image list when done.
 | Restart policy | **Unless stopped** |
 | Network mode | Bridge (default) |
 
-### 5.3 Port mapping
-
-Click **Add port mapping**:
+### 6.3 Port mapping
 
 | Host port | Container port | Protocol |
 |-----------|---------------|----------|
 | `8000` | `8000` | TCP |
 
-This lets you access the dashboard at `http://YOUR-NAS-IP:8000`
+### 6.4 Volume mappings
 
-### 5.4 Volume mappings (bind mounts)
+| Host path (NAS) | Container path | Mode |
+|----------------|----------------|------|
+| `/root/SmartTrader/data` | `/app/data` | Read/Write |
+| `/root/SmartTrader/logs` | `/app/logs` | Read/Write |
+| `/root/SmartTrader/models` | `/app/models` | Read/Write |
+| `/root/SmartTrader/config` | `/app/config` | Read/Write |
 
-Click **Add volume** for each row:
+### 6.5 Environment variables
 
-| Host path (on your NAS) | Container path | Mode |
-|------------------------|----------------|------|
-| `/mnt/main/docker/smarttrader/data` | `/app/data` | Read/Write |
-| `/mnt/main/docker/smarttrader/logs` | `/app/logs` | Read/Write |
-| `/mnt/main/docker/smarttrader/models` | `/app/models` | Read/Write |
-| `/mnt/main/docker/smarttrader/config` | `/app/config` | Read/Write |
+**Option A (best) — Env file field** (if visible in Docker Manager):  
+Enter: `/root/SmartTrader/.env`
 
-> Replace `/mnt/main` with your actual pool path (check Part 2 above)
-
-### 5.5 Environment variables
-
-You have two options:
-
-**Option A (recommended) — env_file**  
-Some versions of TOS 6 Docker Manager have an **Env file** field.  
-Enter: `/mnt/main/docker/smarttrader/.env`
-
-**Option B — Manual entry**  
-Click **Add environment variable** for each key.  
-Copy all key=value pairs from your `.env` file.
-
-Required variables to add manually if Option A isn't available:
+**Option B — Add each var manually:**
 
 ```
 OANDA_API_KEY          = your_key
@@ -210,136 +218,112 @@ LOG_LEVEL              = INFO
 TZ                     = Australia/Melbourne
 ```
 
-### 5.6 Resource limits (optional but recommended)
-
-If Docker Manager shows a **Resources** tab:
+### 6.6 Resource limits (optional)
 
 | Setting | Value |
 |---------|-------|
 | Memory limit | `1536` MB (1.5 GB) |
 | CPU limit | `1.0` |
-| Memory reservation | `512` MB |
 
-### 5.7 Launch
+### 6.7 Launch
 
-Click **Create** or **Apply** → then click **Start** on the container.
+Click **Create** → **Start**
 
 ---
 
-## Part 6 — Verify It's Running
+## Part 7 — Verify It's Running
 
-### Check container status
-Docker Manager → Containers → `smarttrader` should show **Running** (green)
+**In Docker Manager:**  
+Containers → `smarttrader` → should show **Running** (green dot)
 
-### View logs
-1. Click on the `smarttrader` container
-2. Click **Logs** tab
-3. Look for lines like:
-   ```
-   INFO  SmartTrader starting...
-   INFO  Connected to OANDA ✓
-   INFO  Connected to Alpaca ✓
-   INFO  Signal log mode: ON (dry run)
-   ```
+**View logs:**  
+Click container → **Logs** → look for:
+```
+INFO  SmartTrader starting...
+INFO  Connected to OANDA ✓
+INFO  Connected to Alpaca ✓
+INFO  Signal log mode: ON (signals logged, no trades executed)
+```
 
-### Access dashboard
-Open a browser on your local network:  
+**Dashboard:**  
 `http://YOUR-NAS-IP:8000`
 
-### Check from NAS terminal (optional)
-```bash
-ssh admin@YOUR-NAS-IP
-docker logs smarttrader --tail 50 -f
-```
-
 ---
 
-## Part 7 — Config Files (edit without rebuilding)
+## Part 8 — Copy Config Files (First Time Only)
 
-Because `/mnt/main/docker/smarttrader/config` is mounted to `/app/config`,  
-you can edit config files directly on your NAS and restart the container —  
-no image rebuild needed.
+Since `/root/SmartTrader/config` is mounted to `/app/config`, you can edit
+config files directly from TOS 6 File Manager without touching the container.
 
-### Copy default configs to NAS
-
-First time only — SSH in and copy the bundled configs:
+But first, copy the bundled defaults out:
 
 ```bash
 ssh admin@YOUR-NAS-IP
-
-# Copy bundled configs out to the host mount
-docker cp smarttrader:/app/config/trading_config.yaml  /mnt/main/docker/smarttrader/config/
-docker cp smarttrader:/app/config/broker_config.yaml   /mnt/main/docker/smarttrader/config/
-docker cp smarttrader:/app/config/model_config.yaml    /mnt/main/docker/smarttrader/config/
+docker cp smarttrader:/app/config/trading_config.yaml  ~/SmartTrader/config/
+docker cp smarttrader:/app/config/broker_config.yaml   ~/SmartTrader/config/
+docker cp smarttrader:/app/config/model_config.yaml    ~/SmartTrader/config/
 ```
 
-Now you can edit them via **File Manager** in TOS 6 (or any text editor over SMB).
+Now they appear in **File Manager → Home → SmartTrader → config** and you
+can open and edit them directly in TOS 6 without SSH.
 
-### Key config values to know
+### Key settings
 
 | File | Setting | Current | When to change |
 |------|---------|---------|----------------|
-| `trading_config.yaml` | `signal_log_mode` | `true` | Set to `false` after ~2 weeks of calibration |
+| `trading_config.yaml` | `signal_log_mode` | `true` | Set `false` after ~2 weeks |
 | `trading_config.yaml` | `min_confidence` | `0.42` | Tune up if too many bad signals |
 | `broker_config.yaml` | `default_brokers.crypto` | `binance` | Leave as-is |
-| `trading_config.yaml` | `position_sizing_method` | `kelly` | Leave as-is |
 
 ---
 
-## Part 8 — Updating to a New Version
+## Part 9 — Updating to a New Version
 
-When you push code changes to GitHub, the Action auto-builds a new image.  
-To update your running container:
+When you push code to GitHub, Actions auto-builds a new image.
 
-1. Docker Manager → **Images** → select `rdelomel/smarttrader:latest` → **Pull** (re-pull)
-2. Docker Manager → **Containers** → `smarttrader` → **Stop** → **Delete**
-3. Re-create the container with the same settings (Part 5 above)
-4. Start
+1. Docker Manager → **Images** → `rdelomel/smarttrader:latest` → **Pull** (re-pull)
+2. Containers → `smarttrader` → **Stop** → **Delete**
+3. Re-create using the same settings (Part 6)
+4. **Start**
 
-> **Tip**: TOS 6 Docker Manager may have a **Recreate** button that handles steps 2–4 automatically after a pull.
+> TOS 6 may have a **Recreate** button that handles steps 2-4 automatically.
 
 ---
 
 ## Troubleshooting
 
+### Pull fails — "authentication required" or "unauthorized"
+→ Complete Part 4 (add Docker Hub credentials to Docker Manager registry settings)
+
 ### Container exits immediately
 ```bash
 docker logs smarttrader
 ```
-Most common causes:
-- Missing env var (API key typo) → check `.env` file
-- Volume path wrong → verify `/mnt/main/` is correct for your pool
+Common causes:
+- Typo in API key in `.env` file
+- Volume path wrong — confirm `/root/SmartTrader/` exists: `ls ~/SmartTrader/`
 
-### No trades happening
-- Check `signal_log_mode: true` in `trading_config.yaml` — this is intentional for first 2 weeks
-- After calibration, edit the config file and restart container
+### No trades happening after weeks
+- Check `signal_log_mode: true` in `~/SmartTrader/config/trading_config.yaml`
+- This is **intentional** for the first 2 weeks
+- After calibration: set to `false`, restart container
 
-### Cannot access dashboard on port 8000
-- Verify port 8000 is not blocked by TerraMaster firewall  
-  (TOS 6 → Control Panel → Security → Firewall)
-- Try `curl http://localhost:8000/health` from SSH to confirm container is serving
-
-### Image pull fails (authentication)
-- The image is public on Docker Hub — no auth needed to pull
-- If you made your Docker Hub repo private, set it back to public or log in:  
-  `docker login` in SSH then pull
-
-### Wrong timezone
-- Edit `.env` → change `TZ=Australia/Melbourne` to your timezone
-- Restart container
+### Can't reach dashboard on port 8000
+- TOS 6 → Control Panel → Security → Firewall → allow port 8000 on LAN
+- Test: `curl http://localhost:8000/health` from SSH
 
 ---
 
 ## Quick Reference Card
 
 ```
-📦 Image:     rdelomel/smarttrader:latest
+📦 Image:     rdelomel/smarttrader:latest   (private Hub)
 🔌 Port:      8000 → 8000
-📁 Data:      /mnt/main/docker/smarttrader/data   → /app/data
-📋 Logs:      /mnt/main/docker/smarttrader/logs   → /app/logs
-🧠 Models:    /mnt/main/docker/smarttrader/models → /app/models
-⚙️  Config:    /mnt/main/docker/smarttrader/config → /app/config
-🔐 Env file:  /mnt/main/docker/smarttrader/.env
+📁 Data:      /root/SmartTrader/data    → /app/data
+📋 Logs:      /root/SmartTrader/logs    → /app/logs
+🧠 Models:    /root/SmartTrader/models  → /app/models
+⚙️  Config:    /root/SmartTrader/config  → /app/config
+🔐 Env file:  /root/SmartTrader/.env
 🔄 Restart:   unless-stopped
 💾 RAM limit: 1.5 GB
 ```
@@ -349,18 +333,18 @@ Most common causes:
 ## Calibration Roadmap
 
 ```
-Week 1-2:  signal_log_mode = true  ← you are here
-           Watch logs — are signals being generated?
-           Review /app/logs/ for signal quality
+Now (Week 1-2):  signal_log_mode = true
+                 Signals logged, zero trades executed
+                 Watch logs at ~/SmartTrader/logs/
 
-Week 3+:   Set signal_log_mode = false
-           Restart container
-           Monitor paper trades at http://NAS-IP:8000
+Week 3+:         Set signal_log_mode = false → restart
+                 Paper trading starts
+                 Monitor at http://NAS-IP:8000
 
-Month 1-3: Win rate > 52%, Sharpe > 1.5?
-           Consider enabling DRL in model_config.yaml
+Month 1-3:       Win rate > 52%, Sharpe > 1.5?
+                 Enable DRL in model_config.yaml
 
-Month 3+:  Change ALPACA_BASE_URL to https://api.alpaca.markets
-           Set TRADING_MODE=live, ENABLE_LIVE_TRADING=true
-           🚀 Live trading!
+Month 3+:        Change ALPACA_BASE_URL to https://api.alpaca.markets
+                 Set TRADING_MODE=live, ENABLE_LIVE_TRADING=true
+                 🚀 Live trading!
 ```
