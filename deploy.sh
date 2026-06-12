@@ -67,7 +67,7 @@ docker run -d \
   -v "$BASE_DIR/data:/app/data" \
   -v "$BASE_DIR/logs:/app/logs" \
   -v "$BASE_DIR/models:/app/models" \
-  -v "$BASE_DIR/config:/app/config" \
+  -v "$BASE_DIR/config:/app/config:ro" \
   --memory=1536m \
   --cpus=1.0 \
   "$IMAGE"
