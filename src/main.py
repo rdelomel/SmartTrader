@@ -2217,7 +2217,17 @@ class TradingAgent:
                         if strategy == 'smarttrader' or (manage_external and '_sync' in strategy):
                             # Get market data for ATR calculation
                             try:
-                                data_fetcher = DataFetcher(broker_for_prices, self.storage)
+                                # Use symbol-appropriate broker for data fetch
+                                _trailing_broker = broker_for_prices
+                                if '/_' not in symbol and '/' in symbol:
+                                    _base = symbol.split('/')[0].upper()
+                                    _crypto = ['BTC','ETH','SOL','ADA','DOT','LINK','MATIC','AVAX','UNI','ATOM','BNB']
+                                    if _base not in _crypto:
+                                        for _bn, _b in self.brokers.items():
+                                            if 'forex' in _bn.lower() or 'oanda' in _bn.lower():
+                                                _trailing_broker = _b
+                                                break
+                                data_fetcher = DataFetcher(_trailing_broker, self.storage)
                                 data_list = data_fetcher.get_latest_data(symbol, '1h', days=7)
                                 if data_list:
                                     df = pd.DataFrame(data_list)
@@ -2314,7 +2324,7 @@ class TradingAgent:
                     else:
                         # Fetch recent data for ATR calculation
                         try:
-                            data = broker.get_historical_data(symbol, timeframe='1h', limit=50)
+                            data = broker.get_historical_data(symbol, timeframe='1h', periods=50)
                             if data is None or data.empty or len(data) < 14:
                                 raise ValueError("Insufficient data for ATR")
                             

@@ -77,7 +77,7 @@ class DataFetcher:
                 end_date=end_date
             )
             
-            if not data:
+            if data is None or (hasattr(data, "empty") and data.empty) or (not hasattr(data, "empty") and not data):
                 print(f"No data fetched for {symbol} {timeframe}")
                 return 0
             
