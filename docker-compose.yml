@@ -1,56 +1,57 @@
-# docker-compose.yml — SmartTrader on NAS (Synology / QNAP / TrueNAS)
+# docker-compose.yml — SmartTrader on TerraMaster TOS 6
+# All data lives in ~/SmartTrader/ (i.e. /root/SmartTrader/)
 # Usage:
-#   1. Copy to your NAS (e.g. /volume1/docker/smartrader/)
-#   2. Create .env file alongside it with your API keys
-#   3. Run: docker-compose up -d
+#   1. SSH into NAS and run:  mkdir -p ~/SmartTrader/{data,logs,models,config}
+#   2. Create ~/SmartTrader/.env with your API keys
+#   3. docker login  (required — image is private)
+#   4. docker-compose up -d
 #
-# Works with: Synology Container Manager, QNAP Container Station,
-#             TrueNAS SCALE, Portainer, or plain docker-compose
+# OR: use TOS 6 Docker Manager GUI — see TOS6_DOCKER_MANAGER.md
 
 version: "3.8"
 
 services:
   smarttrader:
-    image: smarttrader:latest          # built locally — see build section below
+    image: rdelomel/smarttrader:latest  # private Docker Hub image
     build:
       context: .
-      dockerfile: Dockerfile.nas       # lighter NAS-optimised Dockerfile
+      dockerfile: Dockerfile.nas         # lighter NAS-optimised Dockerfile
     container_name: smarttrader
-    restart: unless-stopped            # auto-restart on crash or NAS reboot
+    restart: unless-stopped              # auto-restart on crash or NAS reboot
 
     # ── Environment variables ────────────────────────────────────────────────
     env_file:
-      - .env                           # Your API keys live here — never commit!
+      - /root/SmartTrader/.env           # Your API keys live here — never commit!
 
     environment:
-      - TRADING_MODE=paper             # Change to 'live' only when ready
+      - TRADING_MODE=paper               # Change to 'live' only when ready
       - ENABLE_LIVE_TRADING=false
       - LOG_LEVEL=INFO
       - TF_ENABLE_ONEDNN_OPTS=0
-      - TZ=Australia/Melbourne         # Your timezone
+      - TZ=Australia/Melbourne
 
     # ── Persistent volumes ───────────────────────────────────────────────────
-    # All data survives container restarts
+    # All data survives container restarts and image updates
     volumes:
-      - ./data:/app/data               # SQLite trading database
-      - ./logs:/app/logs               # Log files
-      - ./models:/app/models           # Trained ML models
-      - ./config:/app/config           # Config YAMLs (edit without rebuild)
+      - /root/SmartTrader/data:/app/data        # SQLite trading database
+      - /root/SmartTrader/logs:/app/logs        # Log files
+      - /root/SmartTrader/models:/app/models    # Trained ML models
+      - /root/SmartTrader/config:/app/config    # Config YAMLs (edit without rebuild)
 
-    # ── Dashboard port (optional — remove if you don't need the web UI) ──────
+    # ── Dashboard port ──────────────────────────────────────────────────────
     ports:
-      - "8000:8000"                    # Access dashboard at http://NAS-IP:8000
+      - "8000:8000"                      # Access dashboard at http://NAS-IP:8000
 
     # ── Resource limits (tune to your NAS specs) ─────────────────────────────
     deploy:
       resources:
         limits:
-          memory: 1.5G                 # Enough for Python + XGBoost + SQLite
-          cpus: "1.0"                  # 1 core is sufficient for 1h timeframe
+          memory: 1.5G                   # Enough for Python + XGBoost + SQLite
+          cpus: "1.0"                    # 1 core is sufficient for 1h timeframe
         reservations:
           memory: 512M
 
-    # ── Health check ─────────────────────────────────────────────────────────
+    # ── Health check ────────────────────────────────────────────────────────
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 60s
@@ -58,24 +59,12 @@ services:
       start_period: 120s
       retries: 3
 
-    # ── Logging ──────────────────────────────────────────────────────────────
+    # ── Logging ─────────────────────────────────────────────────────────────
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "5"
-
-  # ── Optional: Watchtower for automatic image updates ─────────────────────
-  # Remove this service if you prefer manual updates
-  watchtower:
-    image: containrrr/watchtower
-    container_name: smarttrader-updater
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 86400 smarttrader   # Check for updates daily
-    environment:
-      - TZ=Australia/Melbourne
 
 networks:
   default:
