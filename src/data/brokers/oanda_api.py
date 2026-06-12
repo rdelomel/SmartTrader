@@ -76,7 +76,9 @@ class OANDABroker(BaseBroker):
                 params.pop('count', None)
             if end_date:
                 params['to'] = end_date.isoformat() + 'Z'
-            url = f"{self.base_url}/v3/instruments/{symbol}/candles"
+            # OANDA instrument IDs use underscores (EUR_USD not EUR/USD)
+            oanda_symbol = symbol.replace('/', '_')
+            url = f"{self.base_url}/v3/instruments/{oanda_symbol}/candles"
             response = self.session.get(url, params=params)
             response.raise_for_status()
             data = response.json()
