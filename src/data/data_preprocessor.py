@@ -20,7 +20,13 @@ class DataPreprocessor:
         Returns:
             Cleaned pandas DataFrame
         """
-        if not data:
+        # Safe empty-check: handles both DataFrames and lists
+        if data is None:
+            return pd.DataFrame()
+        if isinstance(data, pd.DataFrame):
+            if data.empty:
+                return pd.DataFrame()
+        elif not data:
             return pd.DataFrame()
         
         df = pd.DataFrame(data)
