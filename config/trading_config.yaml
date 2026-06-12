@@ -137,6 +137,8 @@ assets:
       - BNB/USDT
     timeframe: 1h
     max_positions: 2
+    trading_hours:
+      allowed_days: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]
 
   forex:
     enabled: true
@@ -153,6 +155,7 @@ assets:
       end: "23:59"
       timezone: UTC
       exclude_weekends: true
+      allowed_days: [monday, tuesday, wednesday, thursday, friday]
 
   stocks:
     enabled: false              # Stage 3 - enable after crypto/forex profitable

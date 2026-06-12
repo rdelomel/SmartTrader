@@ -41,7 +41,7 @@ class BaseBroker(ABC):
     RECONNECT_BASE_DELAY: float = 2.0   # seconds; doubles each attempt
     RECONNECT_MAX_DELAY: float = 60.0   # cap
 
-    def __init__(self, api_key: str, api_secret: str, testnet: bool = True):
+    def __init__(self, api_key: str = '', api_secret: str = '', testnet: bool = True):
         """
         Initialize broker connection
 
