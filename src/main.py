@@ -813,6 +813,10 @@ class TradingAgent:
             # Step 2: Clean up phantom trades (trades in database that don't exist in brokers)
             print("\n[STARTUP] Cleaning up phantom trades (database trades not found in brokers)...")
             self._cleanup_phantom_trades()
+
+            # Step 3: Reconcile P&L for existing imported broker trades
+            print("\n[STARTUP] Reconciling P&L for imported broker trades...")
+            self._reconcile_imported_pnl()
             
             open_trades = self.storage.get_open_trades() if self.storage else []
             print(f"[SUCCESS] Startup sync complete: Found {len(open_trades)} open positions in database")
@@ -2441,124 +2445,133 @@ class TradingAgent:
                 # Sync orders from Alpaca (if method exists)
                 if hasattr(broker, 'get_orders'):
                     try:
-                        # Get filled orders from the last 7 days
-                        orders = broker.get_orders(status='filled', limit=100)
+                        # Get filled orders (larger window for better P&L pair matching)
+                        orders = broker.get_orders(status='filled', limit=200)
                         print(f"  Syncing {len(orders)} filled orders from {broker_name}...")
-                        
-                        for order in orders:
-                            order_id = order.get('order_id')
-                            symbol = order.get('symbol', '')
-                            side = order.get('side', 'buy')
-                            filled_qty = order.get('filled_quantity', 0)
-                            price = order.get('price', 0)
-                            filled_at = order.get('filled_at')
-                            
-                            if not order_id or filled_qty == 0 or price == 0:
-                                continue
-                            
-                            # Normalize symbol format (Alpaca returns ETHUSD, we need ETH/USD)
-                            normalized_symbol = symbol.replace('_', '/')
-                            if '/' not in normalized_symbol and len(normalized_symbol) >= 6:
-                                for base_len in [3, 4]:
-                                    if len(normalized_symbol) > base_len:
-                                        base = normalized_symbol[:base_len]
-                                        quote = normalized_symbol[base_len:]
+
+                        def _normalize_sym(sym):
+                            sym = sym.replace('_', '/')
+                            if '/' not in sym and len(sym) >= 6:
+                                for bl in [3, 4]:
+                                    if len(sym) > bl:
+                                        base, quote = sym[:bl], sym[bl:]
                                         if quote in ['USD', 'EUR', 'GBP', 'JPY']:
-                                            normalized_symbol = f"{base}/{quote}"
-                                            break
-                            
-                            # Check if trade already exists by order_id (most reliable check)
-                            existing_trades = self.storage.get_all_trades(limit=1000)
-                            trade_exists = False
-                            is_smarttrader_trade = False
-                            
-                            for existing in existing_trades:
-                                # Match by order_id (trade_id)
-                                if existing.get('trade_id') == order_id:
-                                    trade_exists = True
-                                    existing_strategy = (existing.get('strategy') or '').lower()
-                                    is_smarttrader_trade = ('smarttrader' in existing_strategy or 
-                                                           not existing_strategy or
-                                                           existing_strategy in ['unknown', 'none', ''])
-                                    break
-                            
-                            # Also check if we have a trade for this symbol/side/price that matches
-                            # (This helps sync trades that were placed but order_id wasn't stored)
-                            if not trade_exists:
-                                for existing in existing_trades:
-                                    existing_symbol = existing.get('symbol', '').replace('_', '/')
-                                    if '/' not in existing_symbol and len(existing_symbol) >= 6:
-                                        for base_len in [3, 4]:
-                                            if len(existing_symbol) > base_len:
-                                                base = existing_symbol[:base_len]
-                                                quote = existing_symbol[base_len:]
-                                                if quote in ['USD', 'EUR', 'GBP', 'JPY']:
-                                                    existing_symbol = f"{base}/{quote}"
-                                                    break
-                                    
-                                    # Match by normalized symbol, side, and similar price (within 1%)
-                                    if (existing_symbol == normalized_symbol and 
-                                        existing.get('side', '').lower() == side.lower() and
-                                        abs(existing.get('entry_price', 0) - price) / max(price, 0.01) < 0.01):
-                                        trade_exists = True
-                                        # Update the existing trade with the order_id if it doesn't have one
-                                        if not existing.get('trade_id') or existing.get('trade_id', '').startswith('failed_'):
-                                            self.storage.update_trade(existing.get('trade_id'), {'trade_id': order_id})
-                                        existing_strategy = (existing.get('strategy') or '').lower()
-                                        is_smarttrader_trade = ('smarttrader' in existing_strategy or 
-                                                               not existing_strategy or
-                                                               existing_strategy in ['unknown', 'none', ''])
-                                        break
-                            
-                            if not trade_exists:
-                                # Parse filled_at timestamp
-                                entry_time = datetime.now()
-                                if filled_at:
-                                    try:
-                                        from dateutil import parser
-                                        entry_time = parser.parse(filled_at)
-                                    except:
-                                        pass
-                                
-                                # Check if position is still open (if not, mark as closed)
-                                open_positions = broker.get_open_positions()
-                                position_still_open = False
-                                for pos in open_positions:
-                                    if (pos.get('symbol') == symbol and 
-                                        pos.get('side') == side and
-                                        abs(pos.get('entry_price', 0) - price) / max(price, 0.01) < 0.01):
-                                        position_still_open = True
-                                        break
-                                
-                                # Determine if this is a SmartTrader trade
-                                # If strategy wasn't determined from existing trade, check if it looks like ours
-                                if not is_smarttrader_trade:
-                                    # Check recent trades to see if this matches a SmartTrader pattern
-                                    for recent in existing_trades[:50]:  # Check last 50 trades
-                                        recent_strategy = (recent.get('strategy') or '').lower()
-                                        if ('smarttrader' in recent_strategy or 
-                                            recent_strategy in ['unknown', 'weighted voting', 'trend following', 'mean reversion']):
-                                            is_smarttrader_trade = True
-                                            break
-                                
-                                strategy_to_use = 'smarttrader' if is_smarttrader_trade else f'{broker_name}_order_sync'
-                                
-                                trade_data = {
-                                    'trade_id': order_id,
-                                    'symbol': normalized_symbol,  # Use normalized symbol
-                                    'side': side,
-                                    'quantity': filled_qty,
-                                    'entry_price': price,
-                                    'entry_time': entry_time,
-                                    'status': 'open' if position_still_open else 'closed',
-                                    'strategy': strategy_to_use
+                                            return f"{base}/{quote}"
+                            return sym
+
+                        def _parse_fill_time(filled_at):
+                            if not filled_at:
+                                return datetime.now()
+                            try:
+                                from dateutil import parser as _dp
+                                return _dp.parse(filled_at)
+                            except Exception:
+                                return datetime.now()
+
+                        # Group orders by normalized symbol, sort by fill time
+                        from collections import defaultdict as _dd, deque as _dq
+                        orders_by_symbol = _dd(list)
+                        for _ord in orders:
+                            if not _ord.get('order_id') or float(_ord.get('filled_quantity', 0) or 0) == 0:
+                                continue
+                            _ord['_sym'] = _normalize_sym(_ord.get('symbol', ''))
+                            orders_by_symbol[_ord['_sym']].append(_ord)
+
+                        # Fetch existing trades once to avoid repeated DB hits
+                        _existing = self.storage.get_all_trades(limit=5000)
+                        _existing_ids = {str(t.get('trade_id', '')): t for t in _existing}
+
+                        # Get open broker positions for status check
+                        _open_pos = {}
+                        try:
+                            for _pos in broker.get_open_positions():
+                                _open_pos[_normalize_sym(_pos.get('symbol', ''))] = _pos
+                        except Exception:
+                            pass
+
+                        # FIFO-match BUY/SELL pairs per symbol → produce single closed trade records
+                        for _sym, _sym_orders in orders_by_symbol.items():
+                            _sym_orders.sort(key=lambda x: x.get('filled_at') or '')
+                            _pending_buys  = _dq()  # opening long legs
+                            _pending_sells = _dq()  # opening short legs
+
+                            for _ord in _sym_orders:
+                                _side  = (_ord.get('side') or 'buy').lower()
+                                _qty   = float(_ord.get('filled_quantity', 0) or 0)
+                                _price = float(_ord.get('price', 0) or 0)
+                                if _qty == 0 or _price == 0:
+                                    continue
+
+                                if _side == 'buy':
+                                    if _pending_sells:
+                                        # Closes a short position
+                                        _open_sell = _pending_sells.popleft()
+                                        _entry_p = float(_open_sell.get('price', 0) or 0)
+                                        _pnl = round((_entry_p - _price) * _qty, 4)
+                                        _pct = round(_pnl / (_entry_p * _qty) * 100, 4) if _entry_p else 0
+                                        _tid = _open_sell['order_id']
+                                        if _tid not in _existing_ids:
+                                            _td = {
+                                                'trade_id': _tid, 'symbol': _sym, 'side': 'sell',
+                                                'quantity': _qty,
+                                                'entry_price': _entry_p,
+                                                'exit_price': _price,
+                                                'entry_time': _parse_fill_time(_open_sell.get('filled_at')),
+                                                'exit_time': _parse_fill_time(_ord.get('filled_at')),
+                                                'status': 'closed', 'pnl': _pnl, 'pnl_percent': _pct,
+                                                'strategy': f'{broker_name}_order_sync',
+                                            }
+                                            if self.storage.store_trade(_td):
+                                                print(f"    ✅ Synced SHORT {_sym}: ${_entry_p:.2f}→${_price:.2f} P&L ${_pnl:.2f}")
+                                                _existing_ids[_tid] = _td
+                                    else:
+                                        _pending_buys.append(_ord)
+
+                                elif _side == 'sell':
+                                    if _pending_buys:
+                                        # Closes a long position
+                                        _open_buy = _pending_buys.popleft()
+                                        _entry_p = float(_open_buy.get('price', 0) or 0)
+                                        _pnl = round((_price - _entry_p) * _qty, 4)
+                                        _pct = round(_pnl / (_entry_p * _qty) * 100, 4) if _entry_p else 0
+                                        _tid = _open_buy['order_id']
+                                        if _tid not in _existing_ids:
+                                            _td = {
+                                                'trade_id': _tid, 'symbol': _sym, 'side': 'buy',
+                                                'quantity': _qty,
+                                                'entry_price': _entry_p,
+                                                'exit_price': _price,
+                                                'entry_time': _parse_fill_time(_open_buy.get('filled_at')),
+                                                'exit_time': _parse_fill_time(_ord.get('filled_at')),
+                                                'status': 'closed', 'pnl': _pnl, 'pnl_percent': _pct,
+                                                'strategy': f'{broker_name}_order_sync',
+                                            }
+                                            if self.storage.store_trade(_td):
+                                                print(f"    ✅ Synced LONG  {_sym}: ${_entry_p:.2f}→${_price:.2f} P&L ${_pnl:.2f}")
+                                                _existing_ids[_tid] = _td
+                                    else:
+                                        _pending_sells.append(_ord)
+
+                            # Remaining unmatched = still-open positions (no closing leg in history)
+                            for _ord in list(_pending_buys) + list(_pending_sells):
+                                _tid = _ord['order_id']
+                                if _tid in _existing_ids:
+                                    continue
+                                _price = float(_ord.get('price', 0) or 0)
+                                _side  = (_ord.get('side') or 'buy').lower()
+                                _qty   = float(_ord.get('filled_quantity', 0) or 0)
+                                _still_open = _sym in _open_pos
+                                _td = {
+                                    'trade_id': _tid, 'symbol': _sym, 'side': _side,
+                                    'quantity': _qty, 'entry_price': _price,
+                                    'entry_time': _parse_fill_time(_ord.get('filled_at')),
+                                    'status': 'open' if _still_open else 'closed',
+                                    'pnl': 0.0, 'strategy': f'{broker_name}_order_sync',
                                 }
-                                
-                                stored_id = self.storage.store_trade(trade_data)
-                                if stored_id:
-                                    status_str = 'open' if position_still_open else 'closed'
-                                    trade_type = "SmartTrader" if is_smarttrader_trade else "external"
-                                    print(f"    ✅ Synced {trade_type} order {order_id}: {normalized_symbol} {side} {filled_qty} @ ${price:.2f} (status: {status_str})")
+                                if self.storage.store_trade(_td):
+                                    print(f"    ✅ Synced {_side.upper()} {_sym}: ${_price:.2f} ({'open' if _still_open else 'closed/unmatched'})")
+                                    _existing_ids[_tid] = _td
+
                     except Exception as e:
                         print(f"  Error syncing orders from {broker_name}: {e}")
                         self.logger.log_error(e, {'broker': broker_name, 'action': 'sync_orders'})
@@ -2780,6 +2793,99 @@ class TradingAgent:
         except Exception as e:
             self.logger.log_error(e, {'action': 'sync_positions_from_brokers'})
     
+    def _reconcile_imported_pnl(self):
+        """
+        Reconcile P&L for existing broker-synced trades that have $0 P&L.
+        Matches BUY/SELL pairs using FIFO and calculates proper realized P&L.
+        Merges paired records into a single canonical closed-trade record.
+        Called once at startup after _sync_positions_from_brokers.
+        """
+        try:
+            from collections import defaultdict, deque
+
+            all_trades = self.storage.get_all_trades(limit=5000)
+            # Target: sync trades where pnl is effectively 0 and status is open or closed
+            sync_trades = [
+                t for t in all_trades
+                if '_sync' in (t.get('strategy') or '')
+                and abs(float(t.get('pnl', 0) or 0)) < 0.0001
+                and t.get('status') in ('open', 'closed')
+            ]
+
+            if not sync_trades:
+                print("  [Reconcile] No synced $0 P&L trades found — nothing to do")
+                return
+
+            print(f"  [Reconcile] {len(sync_trades)} synced $0-P&L trades to process...")
+
+            by_symbol = defaultdict(list)
+            for t in sync_trades:
+                by_symbol[t.get('symbol', 'UNKNOWN')].append(t)
+
+            matched = 0
+            for symbol, trades in by_symbol.items():
+                # Sort by entry_time ascending (oldest first → FIFO)
+                trades.sort(key=lambda x: x.get('entry_time') or datetime.min)
+
+                pending_buys  = deque()
+                pending_sells = deque()
+
+                for trade in trades:
+                    side  = (trade.get('side') or 'buy').lower()
+                    qty   = float(trade.get('quantity', 0) or 0)
+                    price = float(trade.get('entry_price', 0) or 0)
+
+                    if side == 'buy':
+                        if pending_sells:
+                            # This BUY closes a previously opened SHORT
+                            open_sell = pending_sells.popleft()
+                            sell_p = float(open_sell.get('entry_price', 0) or 0)
+                            pnl = round((sell_p - price) * qty, 4)
+                            pct = round(pnl / (sell_p * qty) * 100, 4) if sell_p else 0
+                            # Update the SELL trade to become the canonical closed record
+                            self.storage.update_trade(open_sell['trade_id'], {
+                                'exit_price': price,
+                                'exit_time': trade.get('entry_time'),
+                                'status': 'closed',
+                                'pnl': pnl,
+                                'pnl_percent': pct,
+                            })
+                            # Remove the now-redundant BUY-close leg
+                            self.storage.delete_trade(trade['trade_id'])
+                            matched += 1
+                            print(f"    ↔ SHORT {symbol}: entry ${sell_p:.4f} → exit ${price:.4f} | P&L ${pnl:.2f}")
+                        else:
+                            pending_buys.append(trade)
+
+                    elif side == 'sell':
+                        if pending_buys:
+                            # This SELL closes a previously opened LONG
+                            open_buy = pending_buys.popleft()
+                            buy_p = float(open_buy.get('entry_price', 0) or 0)
+                            pnl = round((price - buy_p) * qty, 4)
+                            pct = round(pnl / (buy_p * qty) * 100, 4) if buy_p else 0
+                            # Update the BUY trade to become the canonical closed record
+                            self.storage.update_trade(open_buy['trade_id'], {
+                                'exit_price': price,
+                                'exit_time': trade.get('entry_time'),
+                                'status': 'closed',
+                                'pnl': pnl,
+                                'pnl_percent': pct,
+                            })
+                            # Remove the now-redundant SELL-close leg
+                            self.storage.delete_trade(trade['trade_id'])
+                            matched += 1
+                            print(f"    ↔ LONG  {symbol}: entry ${buy_p:.4f} → exit ${price:.4f} | P&L ${pnl:.2f}")
+                        else:
+                            pending_sells.append(trade)
+                # Unmatched leftovers have no counterpart in the fetched window — leave as-is
+
+            print(f"  [Reconcile] Complete: {matched} trade pairs matched and P&L calculated")
+        except Exception as e:
+            print(f"  [Reconcile] Error: {e}")
+            self.logger.log_error(e, {'component': 'reconcile_pnl'})
+
+
     def _cleanup_phantom_trades(self):
         """
         Clean up phantom trades - trades in database that don't exist in brokers.
@@ -3159,7 +3265,7 @@ class TradingAgent:
             total_closed_trades = len(all_closed_trades)
             if total_closed_trades > 0:
                 winning_trades = [t for t in all_closed_trades if t.get('pnl', 0) > 0]
-                losing_trades = [t for t in all_closed_trades if t.get('pnl', 0) <= 0]  # Include break-even (P&L = 0) in losses
+                losing_trades = [t for t in all_closed_trades if t.get('pnl', 0) < 0]   # Only true losses; P&L=0 = break-even
                 win_rate = (len(winning_trades) / total_closed_trades) * 100
                 loss_rate = (len(losing_trades) / total_closed_trades) * 100
             else:
