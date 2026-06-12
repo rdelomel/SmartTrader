@@ -71,11 +71,19 @@ class OANDABroker(BaseBroker):
             }
             granularity = gran_map.get(timeframe, 'H1')
             params = {'granularity': granularity, 'count': periods, 'price': 'M'}
+
+            def _fmt(dt):
+                """Format datetime as RFC3339Z — no dual-suffix like +00:00Z."""
+                from datetime import timezone as _tz
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(_tz.utc).replace(tzinfo=None)
+                return dt.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+
             if start_date:
-                params['from'] = start_date.isoformat() + 'Z'
+                params['from'] = _fmt(start_date)
                 params.pop('count', None)
             if end_date:
-                params['to'] = end_date.isoformat() + 'Z'
+                params['to'] = _fmt(end_date)
             # OANDA instrument IDs use underscores (EUR_USD not EUR/USD)
             oanda_symbol = symbol.replace('/', '_')
             url = f"{self.base_url}/v3/instruments/{oanda_symbol}/candles"

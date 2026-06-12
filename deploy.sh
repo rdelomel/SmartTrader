@@ -5,18 +5,15 @@
 # Usage (first time or any update):
 #   bash ~/SmartTrader/deploy.sh
 #
-# What it does:
-#   1. Stops + removes the old container (if running)
-#   2. Pulls the latest image from Docker Hub
-#   3. Copies bundled configs to host if config folder is empty
-#   4. Starts the container with all settings — reads .env automatically
-#
-# No need to re-enter env vars in Docker Manager ever again.
+# Configs are ALWAYS refreshed from the image on each deploy so that
+# changes committed to the repo (trading_config.yaml etc.) take effect.
+# If you need local overrides, edit the files in $BASE_DIR/config/ AFTER
+# running this script and then do: docker restart smarttrader
 # =============================================================================
 
 set -e
 
-BASE_DIR="$HOME/SmartTrader"
+BASE_DIR="/home/rdelomel/SmartTrader"
 IMAGE="rdelomel/smarttrader:latest"
 CONTAINER="smarttrader"
 
@@ -28,16 +25,15 @@ echo "================================"
 if [ ! -f "$BASE_DIR/.env" ]; then
   echo "❌ ERROR: $BASE_DIR/.env not found."
   echo "   Create it with your API keys before deploying."
-  echo "   See TOS6_DOCKER_MANAGER.md Part 3 for the template."
   exit 1
 fi
 echo "✅ .env found"
 
-# ── 2. Create data folders if missing ───────────────────────────────────────
+# ── 2. Create data folders if missing ─────────────────────────────────
 mkdir -p "$BASE_DIR"/{data,logs,models,config}
 echo "✅ Data folders ready"
 
-# ── 3. Stop + remove old container ─────────────────────────────────────────
+# ── 3. Stop + remove old container ────────────────────────────────────
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   echo "🔄 Stopping old container..."
   docker stop "$CONTAINER" 2>/dev/null || true
@@ -47,12 +43,21 @@ else
   echo "ℹ️  No existing container found"
 fi
 
-# ── 4. Pull latest image ─────────────────────────────────────────────────────
+# ── 4. Pull latest image ───────────────────────────────────────────────
 echo "📥 Pulling latest image..."
 docker pull "$IMAGE"
 echo "✅ Image up to date"
 
-# ── 5. Start container ────────────────────────────────────────────────────────────
+# ── 5. Extract configs from image (ALWAYS — applies repo config changes) ──
+echo "📄 Refreshing configs from image..."
+docker run --rm \
+  -v "$BASE_DIR/config:/output" \
+  --entrypoint sh "$IMAGE" \
+  -c "cp /app/config/trading_config.yaml /app/config/broker_config.yaml /app/config/model_config.yaml /output/ && echo ok" \
+  && echo "✅ Configs refreshed" \
+  || { echo "❌ Config extraction failed — check image and retry"; exit 1; }
+
+# ── 6. Start container ─────────────────────────────────────────────────
 echo "📦 Starting container..."
 docker run -d \
   --name "$CONTAINER" \
@@ -68,21 +73,7 @@ docker run -d \
   "$IMAGE"
 echo "✅ Container started"
 
-# ── 6. Copy bundled configs if config folder is empty ───────────────────────
-if [ -z "$(ls -A $BASE_DIR/config 2>/dev/null)" ]; then
-  echo "📄 Config folder empty — copying bundled configs..."
-  sleep 3  # give container a moment to start
-  docker cp "$CONTAINER:/app/config/trading_config.yaml" "$BASE_DIR/config/" 2>/dev/null && echo "   ✅ trading_config.yaml" || echo "   ⚠️  trading_config.yaml not found in image"
-  docker cp "$CONTAINER:/app/config/broker_config.yaml"  "$BASE_DIR/config/" 2>/dev/null && echo "   ✅ broker_config.yaml"  || echo "   ⚠️  broker_config.yaml not found in image"
-  docker cp "$CONTAINER:/app/config/model_config.yaml"   "$BASE_DIR/config/" 2>/dev/null && echo "   ✅ model_config.yaml"   || echo "   ⚠️  model_config.yaml not found in image"
-  echo "🔄 Restarting to pick up configs..."
-  docker restart "$CONTAINER"
-  echo "✅ Restarted with configs"
-else
-  echo "✅ Config files already present — no copy needed"
-fi
-
-# ── 7. Done ──────────────────────────────────────────────────────────────────
+# ── 7. Done ────────────────────────────────────────────────────────────
 echo ""
 echo "✅ SmartTrader is running!"
 echo "   Dashboard : http://$(hostname -I | awk '{print $1}'):8000"
