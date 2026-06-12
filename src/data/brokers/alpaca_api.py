@@ -150,18 +150,30 @@ class AlpacaBroker(BaseBroker):
             return 0.0
 
     def get_account_balance(self) -> Dict:
-        """Get account balance and equity."""
+        """Get account balance and equity.
+
+        NOTE: For Alpaca paper trading crypto accounts, the 'equity' field returns 0.
+        'portfolio_value' is the reliable total-account-value field; 'equity' is a
+        fallback. Using 'equity' directly causes the leverage-detection code in main.py
+        to fire (available_balance > total_balance → set available to $0) which blocks
+        all trading.
+        """
         if not self.ensure_connected():
             return {'balance': 0.0, 'equity': 0.0}
         try:
             response = self.session.get(f"{self.base_url}/v2/account")
             response.raise_for_status()
             account = response.json()
+            # Use portfolio_value as authoritative total (works for both stocks and crypto paper accounts).
+            # equity can be 0 for crypto paper accounts even when the account has funds.
+            _portfolio_value = float(account.get('portfolio_value', 0))
+            _equity = float(account.get('equity', 0))
+            _total = _portfolio_value or _equity  # prefer portfolio_value; fall back to equity
             return {
-                'balance': float(account.get('cash', 0)),
-                'equity': float(account.get('equity', 0)),
+                'balance': _total,
+                'equity': _total,
                 'buying_power': float(account.get('buying_power', 0)),
-                'portfolio_value': float(account.get('portfolio_value', 0)),
+                'portfolio_value': _portfolio_value,
                 'currency': 'USD'
             }
         except Exception as e:
