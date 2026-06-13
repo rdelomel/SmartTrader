@@ -946,9 +946,11 @@ class TradingAgent:
                     broker_key_map = {
                         'oanda': 'forex',
                         'alpaca': 'stocks',
+                        'binance': 'crypto',  # Binance routes to crypto key (Alpaca fallback)
                         'forex': 'forex',
                         'stocks': 'stocks',
-                        'crypto': 'crypto'
+                        'crypto': 'crypto',
+                        'commodities': 'forex',  # Commodities use OANDA (forex key)
                     }
                     
                     # Get the actual broker key
@@ -1991,6 +1993,14 @@ class TradingAgent:
                         broker_to_check = self.brokers.get('forex') or self.brokers.get('oanda')
                     elif base in ['XAU', 'XAG']:
                         broker_to_check = self.brokers.get('forex') or self.brokers.get('oanda')
+                elif '_' in symbol:
+                    # OANDA underscore format: EUR_USD, GBP_USD, XAU_USD, etc.
+                    base = symbol.split('_')[0].upper()
+                    if base in ['XAU', 'XAG', 'BCO', 'WTICO']:
+                        broker_to_check = self.brokers.get('forex') or self.brokers.get('oanda')
+                    else:
+                        # Default underscore = forex (EUR_USD, GBP_USD, etc.)
+                        broker_to_check = self.brokers.get('forex') or self.brokers.get('oanda')
                 else:
                     broker_to_check = self.brokers.get('stocks') or self.brokers.get('alpaca')
                 
@@ -2167,6 +2177,12 @@ class TradingAgent:
                                     if 'oanda' in broker_name.lower():
                                         price_broker = broker
                                         break
+                        elif '_' in symbol:
+                            # OANDA underscore format: EUR_USD, XAU_USD — always OANDA
+                            for broker_name, broker in self.brokers.items():
+                                if 'oanda' in broker_name.lower() or broker_name == 'forex':
+                                    price_broker = broker
+                                    break
                         
                         # Fallback to broker_for_prices if no specific broker found
                         if not price_broker:
@@ -2280,6 +2296,14 @@ class TradingAgent:
                                     broker_to_use = self.brokers.get('forex') or self.brokers.get('oanda')
                                 # Commodities
                                 elif base in ['XAU', 'XAG']:
+                                    broker_to_use = self.brokers.get('forex') or self.brokers.get('oanda')
+                            elif '_' in symbol:
+                                # OANDA underscore format: EUR_USD, XAU_USD, XAG_USD
+                                base = symbol.split('_')[0].upper()
+                                if base in ['XAU', 'XAG', 'BCO', 'WTICO']:
+                                    broker_to_use = self.brokers.get('forex') or self.brokers.get('oanda')
+                                else:
+                                    # Forex pair
                                     broker_to_use = self.brokers.get('forex') or self.brokers.get('oanda')
                             else:
                                 # Stock symbol
@@ -2466,6 +2490,15 @@ class TradingAgent:
                     asset_class = 'forex'
                 elif any(metal in symbol for metal in ['XAU', 'XAG']):
                     asset_class = 'commodities'
+            elif '_' in symbol:
+                # OANDA underscore format: EUR_USD, GBP_USD, XAU_USD, XAG_USD
+                base = symbol.split('_')[0].upper()
+                if base in ['XAU', 'XAG', 'BCO', 'WTICO']:
+                    asset_class = 'commodities'
+                elif any(fx in symbol.upper() for fx in ['EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
+                    asset_class = 'forex'
+                else:
+                    asset_class = 'forex'  # Safe default for underscore format
             
             # CRITICAL: Calculate proper stop_loss using ATR (same as orchestrator)
             if not stop_loss or stop_loss <= 0:
@@ -3348,6 +3381,12 @@ class TradingAgent:
                                 if 'oanda' in broker_name.lower():
                                     price_broker = broker
                                     break
+                    elif '_' in symbol:
+                        # OANDA underscore format: EUR_USD, XAU_USD — always OANDA
+                        for broker_name, broker in self.brokers.items():
+                            if 'oanda' in broker_name.lower() or broker_name == 'forex':
+                                price_broker = broker
+                                break
                     
                     # Fallback to broker_for_prices
                     if not price_broker:
