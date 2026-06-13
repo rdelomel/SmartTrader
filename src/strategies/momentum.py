@@ -41,13 +41,19 @@ class MomentumStrategy(BaseStrategy):
         """Return per-asset-class parameter overrides for this symbol."""
         asset_class = TrendFollowingStrategy._detect_asset_class(symbol)
         ac = self.config.get('asset_class_overrides', {}).get(asset_class, {})
+        # Commodities fallback defaults — metals behave like slow-moving forex
+        _rsi_os_def  = 32   if asset_class == 'commodities' else self.rsi_oversold
+        _rsi_ob_def  = 68   if asset_class == 'commodities' else self.rsi_overbought
+        _mom_def     = 0.008 if asset_class == 'commodities' else self.min_momentum
+        _stop_def    = 2.0  if asset_class == 'commodities' else self.stop_atr_mult
+        _tp_def      = 2.5  if asset_class == 'commodities' else self.tp_rr_ratio
         return {
             'asset_class':    asset_class,
-            'rsi_oversold':   ac.get('rsi_oversold',    self.rsi_oversold),
-            'rsi_overbought': ac.get('rsi_overbought',  self.rsi_overbought),
-            'min_momentum':   ac.get('min_momentum',    self.min_momentum),
-            'stop_atr_mult':  ac.get('stop_atr_multiple', self.stop_atr_mult),
-            'tp_rr_ratio':    ac.get('tp_rr_ratio',     self.tp_rr_ratio),
+            'rsi_oversold':   ac.get('rsi_oversold',    _rsi_os_def),
+            'rsi_overbought': ac.get('rsi_overbought',  _rsi_ob_def),
+            'min_momentum':   ac.get('min_momentum',    _mom_def),
+            'stop_atr_mult':  ac.get('stop_atr_multiple', _stop_def),
+            'tp_rr_ratio':    ac.get('tp_rr_ratio',     _tp_def),
         }
 
     def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
