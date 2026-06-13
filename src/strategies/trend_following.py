@@ -16,11 +16,16 @@ class TrendFollowingStrategy(BaseStrategy):
 
     @staticmethod
     def _detect_asset_class(symbol: str) -> str:
-        """Classify a trading symbol into 'crypto', 'forex', or 'stocks'."""
+        """Classify a trading symbol into 'crypto', 'forex', 'commodities', or 'stocks'."""
         if not symbol:
             return 'stocks'
         raw = symbol.upper()
-        # Crypto: slash notation BTC/USD, ETH/USDT, etc.
+        # Commodities: OANDA metals format XAU_USD / XAG_USD or slash XAU/USD
+        metal_bases = {'XAU', 'XAG', 'BCO', 'WTICO'}  # gold, silver, Brent, WTI
+        stripped_base = raw.replace('_', '').replace('/', '').replace('-', '')[:3]
+        if stripped_base in metal_bases:
+            return 'commodities'
+        # Crypto: slash notation BTC/USD, ETH/USD, AVAX/USD etc.
         if '/' in raw:
             base = raw.split('/')[0]
             crypto_bases = {'BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'DOT', 'LINK',
@@ -61,14 +66,20 @@ class TrendFollowingStrategy(BaseStrategy):
         """Return per-asset-class parameter overrides for this symbol."""
         asset_class = self._detect_asset_class(symbol)
         ac_overrides = self.config.get('asset_class_overrides', {}).get(asset_class, {})
+        # Commodities fallback defaults (wider stops, slower MAs)
+        _stop_default = 2.0 if asset_class == 'commodities' else self.stop_atr_mult
+        _tp_default   = 2.5 if asset_class == 'commodities' else self.tp_rr_ratio
+        _fast_default = 20  if asset_class == 'commodities' else self.fast_period
+        _slow_default = 50  if asset_class == 'commodities' else self.slow_period
+        _adx_default  = 22  if asset_class == 'commodities' else self.adx_min_trend
         return {
             'asset_class':   asset_class,
-            'fast_period':   ac_overrides.get('fast_ma_period',  self.fast_period),
-            'slow_period':   ac_overrides.get('slow_ma_period',  self.slow_period),
-            'use_ema':       ac_overrides.get('use_ema',         self.use_ema),
-            'stop_atr_mult': ac_overrides.get('stop_atr_multiple', self.stop_atr_mult),
-            'tp_rr_ratio':   ac_overrides.get('tp_rr_ratio',    self.tp_rr_ratio),
-            'adx_min_trend': ac_overrides.get('adx_min_trend',  self.adx_min_trend),
+            'fast_period':   ac_overrides.get('fast_ma_period',  _fast_default),
+            'slow_period':   ac_overrides.get('slow_ma_period',  _slow_default),
+            'use_ema':       ac_overrides.get('use_ema',         True if asset_class == 'commodities' else self.use_ema),
+            'stop_atr_mult': ac_overrides.get('stop_atr_multiple', _stop_default),
+            'tp_rr_ratio':   ac_overrides.get('tp_rr_ratio',    _tp_default),
+            'adx_min_trend': ac_overrides.get('adx_min_trend',  _adx_default),
         }
 
     def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
@@ -125,14 +136,17 @@ class TrendFollowingStrategy(BaseStrategy):
         macd_signal = macd['signal'].iloc[-1]    if not macd.empty else 0
         macd_hist   = macd['histogram'].iloc[-1] if not macd.empty else 0
 
-        # For crypto: require a strong trend before entering to avoid choppy-market whipsaws
-        if asset_class == 'crypto' and adx_value < adx_min_trend:
+        # For crypto and commodities: require a minimum trend strength before entering
+        # Crypto needs strong trends (ADX >= 30) to avoid whipsaws in volatile markets
+        # Commodities need some trend (ADX >= 22) to avoid news-spike false signals
+        if asset_class in ('crypto', 'commodities') and adx_value < adx_min_trend:
             return {
                 'signal': Signal.HOLD, 'confidence': 0.0,
                 'entry_price': current_price,
                 'stop_loss': None, 'take_profit': None,
                 'reason': (f'ADX {adx_value:.1f} < {adx_min_trend} — '
-                           f'trend too weak for crypto entry (using EMA {fast_period}/{slow_period})')
+                           f'trend too weak for {asset_class} entry '
+                           f'(using EMA {fast_period}/{slow_period})')
             }
 
         # Crossover detection
