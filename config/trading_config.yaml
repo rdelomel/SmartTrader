@@ -1,16 +1,12 @@
 # ============================================================
 # SmartTrader Configuration v3
-# Updated: 2026-06-12
-# Changes from v2:
-#   - Lowered min_confidence 0.55 -> 0.42 (calibration phase)
-#   - Lowered consensus_threshold 0.55 -> 0.42 (calibration phase)
-#   - Added signal_log_mode: logs all signals without executing
-#     (run 2 weeks in this mode, then tune thresholds from real data)
-#   - Loosened pattern_forecaster (similarity 0.70->0.60, min_matches 3->2)
-#   - Re-enabled mean_reversion (separate toggle, ranging regime only)
-#   - Enabled aggressive_mode (non-DRL only)
-#   - Circuit breaker now ATR-multiplier based (not fixed %)
-#   - Added Kelly position sizing (0.25x fractional)
+# Updated: 2026-06-13
+# Changes from v3.0:
+#   - Fixed crypto symbol format: BTC/USDT -> BTC/USD (Alpaca standard)
+#   - Replaced BNB/USDT with AVAX/USD (Alpaca supports AVAX, not BNB)
+#   - Added commodities asset class: XAU_USD (Gold), XAG_USD (Silver)
+#   - Added commodities to asset_class_strategy_config with calibrated params
+#   - Commodities use OANDA broker (same as forex, native bracket orders)
 # ============================================================
 
 # Signal Log Mode
@@ -128,13 +124,13 @@ strategies:
 assets:
   crypto:
     enabled: true
-    broker: binance             # Now using Binance (better liquidity)
+    broker: alpaca              # Alpaca is the active crypto broker (Binance not yet integrated)
     fallback_broker: alpaca
     symbols:
-      - BTC/USDT
-      - ETH/USDT
-      - SOL/USDT
-      - BNB/USDT
+      - BTC/USD                 # Fixed: was BTC/USDT (Alpaca uses USD not USDT)
+      - ETH/USD                 # Fixed: was ETH/USDT
+      - SOL/USD                 # Fixed: was SOL/USDT
+      - AVAX/USD                # Replaced BNB/USDT — Alpaca supports AVAX, not BNB
     timeframe: 1h
     max_positions: 2
     trading_hours:
@@ -153,6 +149,21 @@ assets:
     trading_hours:
       start: "00:00"
       end: "23:59"
+      timezone: UTC
+      exclude_weekends: true
+      allowed_days: [monday, tuesday, wednesday, thursday, friday]
+
+  commodities:
+    enabled: true
+    broker: oanda               # OANDA supports metals natively (XAU_USD, XAG_USD)
+    symbols:
+      - XAU_USD                 # Gold — highest liquidity metal on OANDA
+      - XAG_USD                 # Silver — second most liquid
+    timeframe: 1h
+    max_positions: 1            # Conservative: only 1 metal position at a time
+    trading_hours:
+      start: "01:00"            # Metals open with Tokyo session
+      end: "22:00"              # Close before NY session end
       timezone: UTC
       exclude_weekends: true
       allowed_days: [monday, tuesday, wednesday, thursday, friday]
@@ -212,6 +223,22 @@ asset_class_strategy_config:
       rsi_oversold: 35             # Forex RSI extremes are less pronounced than crypto
       rsi_overbought: 65
       min_momentum: 0.005          # 0.5% min — forex moves in pips, not percent
+
+  commodities:
+    min_confidence: 0.52           # Between forex and crypto — metals trend well but slowly
+    consensus_threshold: 0.52
+    mean_reversion_enabled: true   # Gold/silver range widely around macro anchors
+    stop_loss_atr_multiple: 2.0    # Metals are volatile intraday; wider stops needed
+    take_profit_rr_ratio: 2.5      # Metals can run far on macro catalysts
+    trend_following:
+      use_ema: true                # EMA preferred; metals spike quickly on news
+      fast_ma_period: 20           # Slower than forex — metals trend on daily/weekly
+      slow_ma_period: 50           # Standard golden cross period for metals
+      adx_min_trend: 22            # Slightly higher than forex; filter ranging sessions
+    momentum:
+      rsi_oversold: 32             # Metal oversold is less extreme than crypto
+      rsi_overbought: 68
+      min_momentum: 0.008          # 0.8% min — metals move ~0.5-1% on normal days
 
   stocks:
     min_confidence: 0.48
