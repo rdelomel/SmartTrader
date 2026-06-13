@@ -318,7 +318,96 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                 .btn-close { background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
                 .btn-close:hover { background: #c82333; }
                 .btn-close:disabled { background: #ccc; cursor: not-allowed; }
-            </style>
+            
+/* ============================================================
+   MOBILE-RESPONSIVE  (injected)
+   ============================================================ */
+
+/* — Topbar — */
+@media(max-width:600px){{
+  .topbar{{padding:0 12px;height:50px;gap:8px}}
+  .logo{{font-size:14px}}
+  .logo-glyph{{width:26px;height:26px;font-size:13px}}
+  #lastUpdate{{display:none}}
+  .btn-sm{{padding:4px 10px;font-size:11px}}
+  .live-pill{{padding:2px 7px;font-size:10px}}
+}}
+
+/* — Main padding — */
+@media(max-width:640px){{
+  .main{{padding:12px 10px}}
+}}
+
+/* — Tab nav: scrollable row, no wrap — */
+.tab-nav{{overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}}
+@media(max-width:600px){{
+  .tab-nav{{width:100%;border-radius:8px}}
+  .tab-btn{{padding:6px 14px;font-size:12px}}
+}}
+
+/* — Metric cards — */
+@media(max-width:640px){{
+  .mc{{padding:10px 12px}}
+  .mc-val{{font-size:17px}}
+  .mc-lbl{{font-size:9px}}
+}}
+@media(max-width:360px){{
+  .mrow{{grid-template-columns:1fr}}
+}}
+
+/* — Cards — */
+@media(max-width:640px){{
+  .card{{padding:14px 12px;margin-bottom:14px}}
+  .card-hdr{{margin-bottom:12px;font-size:11px}}
+}}
+
+/* — Tables: always scrollable, minimum widths keep columns readable — */
+.tbl-wrap{{
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  /* fade-right hint so user knows it scrolls */
+  background:
+    linear-gradient(to right,var(--surface) 0%,transparent 5%),
+    linear-gradient(to left, var(--surface) 0%,transparent 5%)
+    right center / 40px 100% no-repeat;
+}}
+/* min widths prevent column crush */
+#posBody ~ * , .card .tbl-wrap table{{min-width:540px}}
+@media(max-width:768px){{
+  table{{font-size:12px}}
+  thead th{{padding:7px 10px;font-size:9px}}
+  tbody td{{padding:8px 10px}}
+  /* hide less-critical columns in positions table on mobile */
+  .pos-col-qty{{display:none}}
+  .pos-col-tp{{display:none}}
+  /* hide less-critical columns in trades table on mobile */
+  .trd-col-qty{{display:none}}
+}}
+
+/* — Reports grid: 2 col on mobile, 1 col on very small — */
+@media(max-width:480px){{
+  .rpt-grid{{grid-template-columns:1fr 1fr}}
+}}
+@media(max-width:360px){{
+  .rpt-grid{{grid-template-columns:1fr}}
+}}
+
+/* — Charts: shorter on mobile — */
+@media(max-width:640px){{
+  .chart-wrap{{height:160px}}
+  .chart-wrap2{{height:190px}}
+}}
+
+/* — Close position button: full width touch target on mobile — */
+@media(max-width:640px){{
+  .btn-close-pos{{padding:6px 10px;font-size:11px}}
+}}
+
+/* — Safe area for notched phones — */
+@media(max-width:640px){{
+  .main{{padding-bottom:max(12px,env(safe-area-inset-bottom))}}
+}}
+</style>
         </head>
         <body>
             <div class="container">
@@ -858,7 +947,10 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0e1a">
 <title>SmartTrader Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -1050,7 +1142,7 @@ tbody tr:last-child{{border-bottom:none}}
 <main class="main">
 
 <!-- = Tab nav = -->
-<div class="tab-nav">
+<div class="tab-nav" role="tablist" aria-label="Dashboard sections">
   <button class="tab-btn active" onclick="switchTab('dashboard',this)">&#128200; Dashboard</button>
   <button class="tab-btn" onclick="switchTab('reports',this)">&#128202; Reports</button>
 </div>
@@ -1083,7 +1175,7 @@ tbody tr:last-child{{border-bottom:none}}
       <div class="card-hdr">Open Positions</div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Current</th><th>Stop Loss</th><th>Take Profit</th><th>P&amp;L</th><th></th></tr></thead>
+          <thead><tr><th>Symbol</th><th>Side</th><th class="pos-col-qty">Qty</th><th>Entry</th><th>Current</th><th>Stop Loss</th><th class="pos-col-tp">Take Profit</th><th>P&amp;L</th><th></th></tr></thead>
           <tbody id="posBody"><tr><td colspan="9" style="text-align:center;padding:28px;color:var(--text3)">Loading...</td></tr></tbody>
         </table>
       </div>
@@ -1103,7 +1195,7 @@ tbody tr:last-child{{border-bottom:none}}
     </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>P&amp;L</th><th>Source</th></tr></thead>
+        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th class="trd-col-qty">Qty</th><th>Price</th><th>P&amp;L</th><th>Source</th></tr></thead>
         <tbody id="tradesBody"><tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text3)">Loading...</td></tr></tbody>
       </table>
     </div>
