@@ -26,6 +26,11 @@ class OANDABroker(BaseBroker):
             'Accept-Datetime-Format': 'RFC3339'
         })
 
+    @staticmethod
+    def _to_oanda_fmt(symbol: str) -> str:
+        """Normalise symbol to OANDA underscore format (EUR/USD -> EUR_USD)."""
+        return symbol.replace('/', '_').upper()
+
     def connect(self) -> bool:
         """Connect to OANDA and verify credentials."""
         try:
@@ -124,6 +129,7 @@ class OANDABroker(BaseBroker):
         if not self.ensure_connected():
             return 0.0
         try:
+            symbol = self._to_oanda_fmt(symbol)
             url = f"{self.base_url}/v3/accounts/{self.account_id}/pricing"
             response = self.session.get(url, params={'instruments': symbol})
             response.raise_for_status()
@@ -184,6 +190,7 @@ class OANDABroker(BaseBroker):
         if not self.ensure_connected():
             return {'success': False, 'error': 'Not connected'}
         try:
+            symbol = self._to_oanda_fmt(symbol)
             units = quantity if side == OrderSide.BUY else -quantity
 
             def get_price_precision(instrument: str) -> int:
@@ -352,10 +359,16 @@ class OANDABroker(BaseBroker):
             return {'order_id': order_id, 'status': OrderStatus.UNKNOWN, 'filled_quantity': 0, 'price': 0.0}
 
     def close_position(self, symbol: str, side: Optional[OrderSide] = None) -> bool:
-        """Close an open position."""
+        """Close an open position.
+
+        side = OrderSide.BUY  → position is LONG  → close longUnits
+        side = OrderSide.SELL → position is SHORT → close shortUnits
+        side = None           → close both directions
+        """
         if not self.ensure_connected():
             return False
         try:
+            symbol = self._to_oanda_fmt(symbol)
             url = f"{self.base_url}/v3/accounts/{self.account_id}/positions/{symbol}/close"
             body = {}
             if side == OrderSide.BUY or side is None:
@@ -380,6 +393,7 @@ class OANDABroker(BaseBroker):
     def is_market_open(self, symbol: str) -> bool:
         """Check whether the forex market is currently open for a symbol."""
         try:
+            symbol = self._to_oanda_fmt(symbol)
             url = f"{self.base_url}/v3/accounts/{self.account_id}/pricing"
             response = self.session.get(url, params={'instruments': symbol})
             response.raise_for_status()
