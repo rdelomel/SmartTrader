@@ -12,7 +12,7 @@
 # Signal Log Mode
 # When true: all signals are logged to logs/signals.jsonl but NO orders are placed
 # Use this for 2 weeks to calibrate thresholds before turning it off
-signal_log_mode: true   # SET TO FALSE when ready to trade
+signal_log_mode: false  # LIVE TRADING ENABLED
 
 # Aggressive Trading Mode
 aggressive_mode:
