@@ -768,7 +768,7 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
 
             if position_found_in_broker and broker_used:
                 try:
-                    order_side = OrderSide.SELL if side == 'buy' else OrderSide.BUY
+                    order_side = OrderSide.BUY if side == 'buy' else OrderSide.SELL
                     closed = broker_used.close_position(symbol, order_side)
 
                     if closed:
