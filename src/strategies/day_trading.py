@@ -7,9 +7,11 @@ from datetime import datetime, time
 try:
     from .base_strategy import BaseStrategy, Signal
     from ..indicators.technical import TechnicalIndicators
+    from .trend_following import TrendFollowingStrategy
 except ImportError:
     from base_strategy import BaseStrategy, Signal
     from indicators.technical import TechnicalIndicators
+    from trend_following import TrendFollowingStrategy
 
 
 class DayTradingStrategy(BaseStrategy):
@@ -42,8 +44,22 @@ class DayTradingStrategy(BaseStrategy):
         self.max_trades_per_day = self.config.get('max_trades_per_day', 5)
         self.indicators = TechnicalIndicators()
     
-    def _is_trading_hours(self, current_time: Optional[datetime] = None) -> bool:
-        """Check if current time is within trading hours"""
+    def _is_trading_hours(self, current_time: Optional[datetime] = None, asset_class: str = 'stocks') -> bool:
+        """Check if current time is within trading hours.
+
+        Crypto trades 24/7 and forex trades ~24/5 (no reliable single-timezone
+        session) so the fixed open/close hour gate — designed for stock market
+        hours — only applies to stocks/commodities.
+        """
+        if asset_class == 'crypto':
+            return True
+        if asset_class == 'forex':
+            # Forex trades continuously Mon-Fri; only exclude weekend close.
+            if current_time is None:
+                current_time = datetime.now()
+            weekday = current_time.weekday() if hasattr(current_time, 'weekday') else datetime.now().weekday()
+            return weekday < 5
+
         if current_time is None:
             current_time = datetime.now()
         
@@ -58,8 +74,7 @@ class DayTradingStrategy(BaseStrategy):
             current_time = datetime.now()
             current_time_only = current_time.time()
         
-        # For crypto (24/7), always allow day trading
-        # For other markets, check trading hours
+        # Stocks/commodities: check fixed trading hours
         return self.open_hour <= current_time_only.hour < self.close_hour
     
     def _get_intraday_data(self, data: pd.DataFrame) -> Dict:
@@ -91,16 +106,18 @@ class DayTradingStrategy(BaseStrategy):
             'range': intraday_range
         }
     
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
         """
         Generate signal for day trading
         
         Args:
             data: Market data DataFrame
+            symbol: Trading symbol — used to select per-asset-class trading-hours rules.
         
         Returns:
             Signal dictionary
         """
+        asset_class = TrendFollowingStrategy._detect_asset_class(symbol)
         if len(data) < 20:
             return {
                 'signal': Signal.HOLD,
@@ -114,8 +131,8 @@ class DayTradingStrategy(BaseStrategy):
         current_price = data['close'].iloc[-1]
         current_time = data.index[-1] if hasattr(data.index[-1], 'hour') else datetime.now()
         
-        # Check if within trading hours
-        if not self._is_trading_hours(current_time):
+        # Check if within trading hours (asset-class aware)
+        if not self._is_trading_hours(current_time, asset_class):
             return {
                 'signal': Signal.HOLD,
                 'confidence': 0.0,
@@ -175,13 +192,13 @@ class DayTradingStrategy(BaseStrategy):
             if current_price >= session_high * 0.999 and rsi_current < 70 and volume_ok:
                 signal = Signal.BUY
                 confidence = min(0.5 + intraday_range * 10, 0.7)
-                reason = f"Intraday breakout - above high (Range: {intraday_range*100:.2f}%)"
+                reason = f"Intraday breakout [{asset_class}] - above high (Range: {intraday_range*100:.2f}%)"
             
             # Breakdown below session low
             elif current_price <= session_low * 1.001 and rsi_current > 30 and volume_ok:
                 signal = Signal.SELL
                 confidence = min(0.5 + intraday_range * 10, 0.7)
-                reason = f"Intraday breakdown - below low (Range: {intraday_range*100:.2f}%)"
+                reason = f"Intraday breakdown [{asset_class}] - below low (Range: {intraday_range*100:.2f}%)"
         
         # Strategy 2: Reversal trading
         if self.use_reversals and signal == Signal.HOLD:
