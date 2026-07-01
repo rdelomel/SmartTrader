@@ -52,8 +52,8 @@ class MomentumStrategy(BaseStrategy):
             'rsi_oversold':   ac.get('rsi_oversold',    _rsi_os_def),
             'rsi_overbought': ac.get('rsi_overbought',  _rsi_ob_def),
             'min_momentum':   ac.get('min_momentum',    _mom_def),
-            'stop_atr_mult':  ac.get('stop_atr_multiple', _stop_def),
-            'tp_rr_ratio':    ac.get('tp_rr_ratio',     _tp_def),
+            'stop_atr_mult':  ac.get('stop_loss_atr_multiple', _stop_def),
+            'tp_rr_ratio':    ac.get('take_profit_rr_ratio', _tp_def),
         }
 
     def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
