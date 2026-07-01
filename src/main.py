@@ -456,13 +456,13 @@ class TradingAgent:
         # Mean reversion
         if strategy_configs.get('mean_reversion', {}).get('enabled', True):
             strategies.append(MeanReversionStrategy(
-                strategy_configs.get('mean_reversion', {})
+                {**strategy_configs.get('mean_reversion', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Breakout
         if strategy_configs.get('breakout', {}).get('enabled', False):
             strategies.append(BreakoutStrategy(
-                strategy_configs.get('breakout', {})
+                {**strategy_configs.get('breakout', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Momentum
@@ -498,7 +498,7 @@ class TradingAgent:
         # Day Trading
         if strategy_configs.get('day_trading', {}).get('enabled', False):
             strategies.append(DayTradingStrategy(
-                strategy_configs.get('day_trading', {})
+                {**strategy_configs.get('day_trading', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Scalping
