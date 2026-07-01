@@ -77,8 +77,8 @@ class TrendFollowingStrategy(BaseStrategy):
             'fast_period':   ac_overrides.get('fast_ma_period',  _fast_default),
             'slow_period':   ac_overrides.get('slow_ma_period',  _slow_default),
             'use_ema':       ac_overrides.get('use_ema',         True if asset_class == 'commodities' else self.use_ema),
-            'stop_atr_mult': ac_overrides.get('stop_atr_multiple', _stop_default),
-            'tp_rr_ratio':   ac_overrides.get('tp_rr_ratio',    _tp_default),
+            'stop_atr_mult': ac_overrides.get('stop_loss_atr_multiple', _stop_default),
+            'tp_rr_ratio':   ac_overrides.get('take_profit_rr_ratio', _tp_default),
             'adx_min_trend': ac_overrides.get('adx_min_trend',  _adx_default),
         }
 
