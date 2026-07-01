@@ -6,9 +6,11 @@ from typing import Dict, Optional
 try:
     from .base_strategy import BaseStrategy, Signal
     from ..indicators.technical import TechnicalIndicators
+    from .trend_following import TrendFollowingStrategy
 except ImportError:
     from base_strategy import BaseStrategy, Signal
     from indicators.technical import TechnicalIndicators
+    from trend_following import TrendFollowingStrategy
 
 
 class MeanReversionStrategy(BaseStrategy):
@@ -29,10 +31,45 @@ class MeanReversionStrategy(BaseStrategy):
         self.z_score_threshold = self.config.get('z_score_threshold', 2.0)
         self.rsi_oversold = self.config.get('rsi_oversold', 30)
         self.rsi_overbought = self.config.get('rsi_overbought', 70)
+        self.stop_atr_mult = self.config.get('stop_loss_atr_multiple', 1.5)
         self.indicators = TechnicalIndicators()
-    
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
-        """Generate signal based on mean reversion with graduated confidence"""
+
+    def _get_ac_params(self, symbol: str) -> Dict:
+        """Return per-asset-class parameter overrides for this symbol."""
+        asset_class = TrendFollowingStrategy._detect_asset_class(symbol)
+        ac = self.config.get('asset_class_overrides', {}).get(asset_class, {})
+        # Mean reversion is disabled for crypto by default (crypto trends, doesn't range)
+        enabled = ac.get('mean_reversion_enabled', asset_class != 'crypto')
+        return {
+            'asset_class': asset_class,
+            'enabled': enabled,
+            'rsi_oversold': ac.get('rsi_oversold', self.rsi_oversold),
+            'rsi_overbought': ac.get('rsi_overbought', self.rsi_overbought),
+            'stop_atr_mult': ac.get('stop_loss_atr_multiple', self.stop_atr_mult),
+        }
+
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
+        """Generate signal based on mean reversion with graduated confidence
+
+        Args:
+            data:   OHLCV DataFrame.
+            symbol: Trading symbol — used to select per-asset-class parameters.
+        """
+        p = self._get_ac_params(symbol)
+        if not p['enabled']:
+            return {
+                'signal': Signal.HOLD,
+                'confidence': 0.0,
+                'entry_price': data['close'].iloc[-1] if not data.empty else 0.0,
+                'stop_loss': None,
+                'take_profit': None,
+                'reason': f"Mean reversion disabled for {p['asset_class']}"
+            }
+        rsi_oversold = p['rsi_oversold']
+        rsi_overbought = p['rsi_overbought']
+        stop_atr_mult = p['stop_atr_mult']
+        asset_class = p['asset_class']
+
         if len(data) < self.lookback_period:
             return {
                 'signal': Signal.HOLD,
@@ -92,13 +129,13 @@ class MeanReversionStrategy(BaseStrategy):
         
         # === BUY SIGNALS (Oversold) ===
         # Strong buy: Extreme oversold with confirmation
-        if (z_score < -self.z_score_threshold or current_price < bb_lower) and rsi_current < self.rsi_oversold:
+        if (z_score < -self.z_score_threshold or current_price < bb_lower) and rsi_current < rsi_oversold:
             signal = Signal.BUY
             
             # Multi-factor confidence
             conf_factors = []
             conf_factors.append(min(abs(z_score) / self.z_score_threshold * 0.35, 0.35))  # Z-score strength
-            conf_factors.append((self.rsi_oversold - rsi_current) / self.rsi_oversold * 0.25)  # RSI oversold
+            conf_factors.append((rsi_oversold - rsi_current) / rsi_oversold * 0.25)  # RSI oversold
             conf_factors.append(0.15)  # Base confidence for extreme condition
             if momentum < 0:  # Falling into oversold
                 conf_factors.append(min(abs(momentum) * 5, 0.15))
@@ -151,12 +188,12 @@ class MeanReversionStrategy(BaseStrategy):
         
         # === SELL SIGNALS (Overbought) ===
         # Strong sell: Extreme overbought with confirmation
-        elif (z_score > self.z_score_threshold or current_price > bb_upper) and rsi_current > self.rsi_overbought:
+        elif (z_score > self.z_score_threshold or current_price > bb_upper) and rsi_current > rsi_overbought:
             signal = Signal.SELL
             
             conf_factors = []
             conf_factors.append(min(z_score / self.z_score_threshold * 0.35, 0.35))
-            conf_factors.append((rsi_current - self.rsi_overbought) / (100 - self.rsi_overbought) * 0.25)
+            conf_factors.append((rsi_current - rsi_overbought) / (100 - rsi_overbought) * 0.25)
             conf_factors.append(0.15)  # Base confidence
             if momentum > 0:  # Rising into overbought
                 conf_factors.append(min(momentum * 5, 0.15))
@@ -212,10 +249,10 @@ class MeanReversionStrategy(BaseStrategy):
         
         if signal != Signal.HOLD:
             if signal == Signal.BUY:
-                stop_loss = current_price - (atr_value * 1.5)
+                stop_loss = current_price - (atr_value * stop_atr_mult)
                 take_profit = bb_middle  # Target the mean
             else:  # SELL
-                stop_loss = current_price + (atr_value * 1.5)
+                stop_loss = current_price + (atr_value * stop_atr_mult)
                 take_profit = bb_middle
         
         return {
