@@ -11,7 +11,7 @@ class ArbitrageStrategy(BaseStrategy):
     def __init__(self, config: Optional[Dict] = None):
         super().__init__("Arbitrage", config)
     
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
         """Generate signal (placeholder)"""
         return {
             'signal': Signal.HOLD,
