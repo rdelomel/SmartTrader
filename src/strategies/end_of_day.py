@@ -65,7 +65,7 @@ class EndOfDayStrategy(BaseStrategy):
         
         return False
     
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
         """
         Generate signal based on end-of-day price action
         
