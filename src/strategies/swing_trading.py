@@ -80,7 +80,7 @@ class SwingTradingStrategy(BaseStrategy):
         
         return {'support': support, 'resistance': resistance}
     
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
         """
         Generate signal based on swing trading principles
         
