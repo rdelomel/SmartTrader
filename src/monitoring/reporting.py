@@ -63,12 +63,16 @@ class TradingReporter:
         # Calculate monthly analytics
         monthly_analytics = self._calculate_monthly_analytics(closed_trades)
         
+        # Calculate per-strategy leaderboard (win rate / profit factor / expectancy)
+        strategy_leaderboard = self._calculate_strategy_leaderboard(closed_trades)
+
         return {
             'general': general_info,
             'periods': periods,
             'advanced': advanced_stats,
             'equity_curve': equity_curve,
             'monthly_analytics': monthly_analytics,
+            'strategy_leaderboard': strategy_leaderboard,
             'last_updated': now.isoformat()
         }
     
@@ -84,6 +88,55 @@ class TradingReporter:
         except:
             return datetime.min
     
+    def _calculate_strategy_leaderboard(self, closed_trades: List[Dict]) -> List[Dict]:
+        """
+        Break down performance by originating strategy so the dashboard can show
+        which strategies are actually profitable (or not) in paper trading.
+
+        Uses the same win-rate / profit-factor / expectancy formulas as
+        _calculate_general_info, just grouped by trade['strategy'].
+        """
+        # Exclude $0-P&L unresolved broker-sync imports (same rule as general info)
+        resolved_trades = [t for t in closed_trades if abs(t.get('pnl', 0) or 0) >= 0.001]
+
+        by_strategy: Dict[str, List[Dict]] = {}
+        for t in resolved_trades:
+            name = t.get('strategy') or 'unknown'
+            by_strategy.setdefault(name, []).append(t)
+
+        leaderboard = []
+        for name, trades in by_strategy.items():
+            winning = [t for t in trades if t.get('pnl', 0) > 0]
+            losing = [t for t in trades if t.get('pnl', 0) < 0]
+            total_profit = sum(t.get('pnl', 0) for t in winning)
+            total_loss = abs(sum(t.get('pnl', 0) for t in losing))
+            pnls = [t.get('pnl', 0) for t in trades]
+            net_profit = total_profit - total_loss
+            win_rate = (len(winning) / len(trades) * 100) if trades else 0.0
+            profit_factor = (total_profit / total_loss) if total_loss > 0 else (float('inf') if total_profit > 0 else 0.0)
+            expectancy = (sum(pnls) / len(pnls)) if pnls else 0.0
+            avg_win = (total_profit / len(winning)) if winning else 0.0
+            avg_loss = (total_loss / len(losing)) if losing else 0.0
+
+            leaderboard.append({
+                'strategy': name,
+                'total_trades': len(trades),
+                'winning_trades': len(winning),
+                'losing_trades': len(losing),
+                'win_rate': round(win_rate, 2),
+                'profit_factor': round(profit_factor, 2) if profit_factor != float('inf') else 999.0,
+                'expectancy': round(expectancy, 2),
+                'net_profit': round(net_profit, 2),
+                'total_profit': round(total_profit, 2),
+                'total_loss': round(total_loss, 2),
+                'average_win': round(avg_win, 2),
+                'average_loss': round(avg_loss, 2),
+            })
+
+        # Rank by net profit descending — most profitable strategies first
+        leaderboard.sort(key=lambda x: x['net_profit'], reverse=True)
+        return leaderboard
+
     def _calculate_general_info(self, closed_trades: List[Dict], open_trades: List[Dict]) -> Dict:
         """Calculate general account information"""
         if not closed_trades:
