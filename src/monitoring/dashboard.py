@@ -906,6 +906,34 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
     monthly       = report_data.get('monthly_analytics', []) if report_data else []
     monthly_data_json = json.dumps([m for m in monthly if isinstance(m, dict)])
 
+    # Build Strategy Leaderboard table rows (ranked by net profit, most profitable first)
+    def _pf_badge(pf):
+        if pf >= 1.5:
+            return '#10b981'  # green
+        if pf >= 1.0:
+            return '#f59e0b'  # amber
+        return '#ef4444'      # red
+
+    leaderboard_rows = ""
+    if strategy_leaderboard:
+        for row in strategy_leaderboard:
+            pf_display = "∞" if row.get('profit_factor', 0) >= 999 else f"{row.get('profit_factor', 0):.2f}"
+            pf_color = _pf_badge(row.get('profit_factor', 0))
+            net_color = '#10b981' if row.get('net_profit', 0) >= 0 else '#ef4444'
+            leaderboard_rows += f'''
+                <tr>
+                    <td style="font-weight:600;">{row.get('strategy', 'unknown')}</td>
+                    <td>{row.get('total_trades', 0)}</td>
+                    <td>{row.get('win_rate', 0):.1f}%</td>
+                    <td style="color:{pf_color}; font-weight:600;">{pf_display}</td>
+                    <td style="color:{net_color}; font-weight:600;">${row.get('net_profit', 0):,.2f}</td>
+                    <td>${row.get('expectancy', 0):,.2f}</td>
+                    <td>${row.get('average_win', 0):,.2f}</td>
+                    <td>${row.get('average_loss', 0):,.2f}</td>
+                </tr>'''
+    else:
+        leaderboard_rows = '<tr><td colspan="8" style="text-align:center; color:#999; padding:20px;">No resolved trades yet — leaderboard will populate as strategies close positions.</td></tr>'
+
     equity_labels   = [str(point.get('date',''))[:10] for point in equity_curve[-120:] if isinstance(point, dict)]
     equity_values   = [float(point.get('equity',0.0) or 0.0) for point in equity_curve[-120:] if isinstance(point, dict)]
     drawdown_values = [float(point.get('drawdown',0.0) or 0.0) for point in equity_curve[-120:] if isinstance(point, dict)]
@@ -1546,6 +1574,7 @@ def _generate_reports_html(report_data: Dict) -> str:
     advanced = report_data.get('advanced', {})
     equity_curve = report_data.get('equity_curve', [])
     monthly = report_data.get('monthly_analytics', [])
+    strategy_leaderboard = report_data.get('strategy_leaderboard', [])
     
     # Prepare equity curve data for Chart.js
     equity_labels = [str(point.get('date', ''))[:10] for point in equity_curve[-100:] if isinstance(point, dict)] if equity_curve else []
@@ -1556,6 +1585,34 @@ def _generate_reports_html(report_data: Dict) -> str:
     monthly_labels = [str(m.get('month', '')) for m in monthly if isinstance(m, dict)]
     monthly_gains = [float(m.get('gain_pct', 0.0) or 0.0) for m in monthly if isinstance(m, dict)]
     monthly_data_json = json.dumps([m for m in monthly if isinstance(m, dict)])
+
+    # Build Strategy Leaderboard table rows (ranked by net profit, most profitable first)
+    def _pf_badge(pf):
+        if pf >= 1.5:
+            return '#10b981'  # green
+        if pf >= 1.0:
+            return '#f59e0b'  # amber
+        return '#ef4444'      # red
+
+    leaderboard_rows = ""
+    if strategy_leaderboard:
+        for row in strategy_leaderboard:
+            pf_display = "∞" if row.get('profit_factor', 0) >= 999 else f"{row.get('profit_factor', 0):.2f}"
+            pf_color = _pf_badge(row.get('profit_factor', 0))
+            net_color = '#10b981' if row.get('net_profit', 0) >= 0 else '#ef4444'
+            leaderboard_rows += f'''
+                <tr>
+                    <td style="font-weight:600;">{row.get('strategy', 'unknown')}</td>
+                    <td>{row.get('total_trades', 0)}</td>
+                    <td>{row.get('win_rate', 0):.1f}%</td>
+                    <td style="color:{pf_color}; font-weight:600;">{pf_display}</td>
+                    <td style="color:{net_color}; font-weight:600;">${row.get('net_profit', 0):,.2f}</td>
+                    <td>${row.get('expectancy', 0):,.2f}</td>
+                    <td>${row.get('average_win', 0):,.2f}</td>
+                    <td>${row.get('average_loss', 0):,.2f}</td>
+                </tr>'''
+    else:
+        leaderboard_rows = '<tr><td colspan="8" style="text-align:center; color:#999; padding:20px;">No resolved trades yet — leaderboard will populate as strategies close positions.</td></tr>'
     
     html = f"""
     <!DOCTYPE html>
@@ -1949,6 +2006,34 @@ def _generate_reports_html(report_data: Dict) -> str:
                 </div>
                 <div class="chart-container">
                     <canvas id="monthlyChartReports"></canvas>
+                </div>
+            </div>
+
+            <!-- Strategy Leaderboard -->
+            <div class="card">
+                <h2>🏆 Strategy Leaderboard</h2>
+                <p style="color:#888; margin-bottom:16px; font-size:14px;">
+                    Per-strategy performance across all resolved paper trades — use this to see which
+                    strategies are actually working so you can reweight or disable underperformers.
+                </p>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                        <thead>
+                            <tr style="text-align:left; border-bottom:2px solid #e0e0e0;">
+                                <th style="padding:10px;">Strategy</th>
+                                <th style="padding:10px;">Trades</th>
+                                <th style="padding:10px;">Win Rate</th>
+                                <th style="padding:10px;">Profit Factor</th>
+                                <th style="padding:10px;">Net P&L</th>
+                                <th style="padding:10px;">Expectancy</th>
+                                <th style="padding:10px;">Avg Win</th>
+                                <th style="padding:10px;">Avg Loss</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {leaderboard_rows}
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
