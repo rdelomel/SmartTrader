@@ -90,35 +90,61 @@ agents:
     min_agents_agreeing: 3       # Lowered from 4 - allow more signals through
 
 # Strategy Weights (MUST sum to 1.0)
+# All 9 implemented strategies enabled for paper-trading research — this is a
+# deliberate "run everything, see what actually works" phase. The dashboard's
+# Strategy Leaderboard (grouped by trade.strategy) tracks win rate / profit
+# factor / expectancy per strategy so underperformers can be pruned or
+# reweighted with real data instead of guesswork. Arbitrage is excluded —
+# it's an unimplemented stub (always HOLD).
 strategies:
   trend_following:
     enabled: true
-    weight: 0.30
+    weight: 0.18
     regimes: [trending]
 
   momentum:
     enabled: true
-    weight: 0.20
+    weight: 0.14
     regimes: [trending, neutral]
 
   breakout:
     enabled: true
-    weight: 0.20
+    weight: 0.14
     regimes: [trending, volatile]
 
   mean_reversion:
-    enabled: true               # RE-ENABLED - only in ranging regime
-    weight: 0.15
+    enabled: true               # auto-disables itself for crypto (see strategy code)
+    weight: 0.10
     regimes: [ranging]
-
-  scalping:
-    enabled: false              # Disabled until execution latency is <100ms
-    weight: 0.00
 
   day_trading:
     enabled: true
-    weight: 0.15
+    weight: 0.10
     regimes: [trending, neutral, ranging]
+
+  volatility:
+    enabled: true                # NEWLY ENABLED — BB/ATR regime strategy, good fit for metals
+    weight: 0.10
+    regimes: [volatile, ranging]
+
+  swing_trading:
+    enabled: true                # NEWLY ENABLED — multi-day swing positions
+    weight: 0.08
+    regimes: [trending, ranging]
+
+  news_trading:
+    enabled: true                # NEWLY ENABLED — reacts to news-driven volatility spikes
+    weight: 0.06
+    regimes: [volatile]
+
+  end_of_day:
+    enabled: true                # NEWLY ENABLED — session-close momentum/reversal
+    weight: 0.05
+    regimes: [trending, neutral, ranging]
+
+  scalping:
+    enabled: true                # NEWLY ENABLED for research — real execution latency still
+    weight: 0.05                 # applies even in paper mode, so treat results with caution
 
 # Asset Classes & Symbols
 assets:
