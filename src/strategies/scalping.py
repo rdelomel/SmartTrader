@@ -62,7 +62,7 @@ class ScalpingStrategy(BaseStrategy):
             'momentum_5': momentum_5
         }
     
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
         """
         Generate signal for scalping
         
