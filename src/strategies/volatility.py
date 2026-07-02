@@ -35,7 +35,7 @@ class VolatilityStrategy(BaseStrategy):
         self.vol_expansion_factor = self.config.get('volatility_expansion_factor', 1.5)
         self.indicators = TechnicalIndicators()
     
-    def generate_signal(self, data: pd.DataFrame) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "") -> Dict:
         """Generate signal based on volatility conditions"""
         if len(data) < max(self.bb_period, self.atr_period) + 10:
             return {
