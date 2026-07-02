@@ -905,6 +905,7 @@ def _generate_unified_dashboard_html(report_data: Optional[Dict] = None) -> str:
     equity_curve  = report_data.get('equity_curve',   []) if report_data else []
     monthly       = report_data.get('monthly_analytics', []) if report_data else []
     monthly_data_json = json.dumps([m for m in monthly if isinstance(m, dict)])
+    strategy_leaderboard = report_data.get('strategy_leaderboard', []) if report_data else []
 
     # Build Strategy Leaderboard table rows (ranked by net profit, most profitable first)
     def _pf_badge(pf):
