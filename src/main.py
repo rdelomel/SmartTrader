@@ -474,25 +474,25 @@ class TradingAgent:
         # Volatility
         if strategy_configs.get('volatility', {}).get('enabled', False):
             strategies.append(VolatilityStrategy(
-                strategy_configs.get('volatility', {})
+                {**strategy_configs.get('volatility', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # News Trading
         if strategy_configs.get('news_trading', {}).get('enabled', False):
             strategies.append(NewsTradingStrategy(
-                strategy_configs.get('news_trading', {})
+                {**strategy_configs.get('news_trading', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # End of Day
         if strategy_configs.get('end_of_day', {}).get('enabled', False):
             strategies.append(EndOfDayStrategy(
-                strategy_configs.get('end_of_day', {})
+                {**strategy_configs.get('end_of_day', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Swing Trading
         if strategy_configs.get('swing_trading', {}).get('enabled', False):
             strategies.append(SwingTradingStrategy(
-                strategy_configs.get('swing_trading', {})
+                {**strategy_configs.get('swing_trading', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         # Day Trading
@@ -504,7 +504,7 @@ class TradingAgent:
         # Scalping
         if strategy_configs.get('scalping', {}).get('enabled', False):
             strategies.append(ScalpingStrategy(
-                strategy_configs.get('scalping', {})
+                {**strategy_configs.get('scalping', {}), 'asset_class_overrides': asset_class_overrides}
             ))
         
         return strategies
