@@ -39,7 +39,7 @@ class NewsTradingStrategy(BaseStrategy):
         self.use_post_news = self.config.get('use_post_news', True)
         self.indicators = TechnicalIndicators()
     
-    def generate_signal(self, data: pd.DataFrame, news_items: Optional[List[Dict]] = None) -> Dict:
+    def generate_signal(self, data: pd.DataFrame, symbol: str = "", news_items: Optional[List[Dict]] = None) -> Dict:
         """
         Generate signal based on news-driven price action
         
