@@ -84,10 +84,11 @@ agents:
 
   orchestrator:
     enabled: true
-    min_confidence: 0.42         # LOWERED from 0.55 - calibration phase
-    consensus_threshold: 0.42    # LOWERED from 0.55 - calibration phase
+    min_confidence: 0.35         # LOWERED from 0.42 - too few trades were passing gate
+    consensus_threshold: 0.35    # LOWERED from 0.42 - too few trades were passing gate
     require_agent_agreement: true
-    min_agents_agreeing: 3       # Lowered from 4 - allow more signals through
+    min_agents_agreeing: 2       # Lowered from 3 — code now actually reads this (was hardcoded to 2 and ignoring this key)
+    disable_short_trades: false  # Was hard-defaulting true in code with no config key at all — re-enabled for paper-trading research
 
 # Strategy Weights (MUST sum to 1.0)
 # All 9 implemented strategies enabled for paper-trading research — this is a
@@ -219,8 +220,8 @@ risk:
 asset_class_strategy_config:
 
   crypto:
-    min_confidence: 0.55         # Tighter than global 0.42 — crypto needs clear signals
-    consensus_threshold: 0.55
+    min_confidence: 0.42         # LOWERED from 0.55 — still tighter than global (crypto whipsaws more)
+    consensus_threshold: 0.42
     mean_reversion_enabled: false  # Never use mean reversion for crypto
     stop_loss_atr_multiple: 1.5    # Crypto ATR is already wide; tighten the multiple
     take_profit_rr_ratio: 2.5      # Higher reward target to offset volatile holding risk
@@ -235,8 +236,8 @@ asset_class_strategy_config:
       min_momentum: 0.05           # 5% min — filters out normal 1-2% crypto noise
 
   forex:
-    min_confidence: 0.50
-    consensus_threshold: 0.50
+    min_confidence: 0.38         # LOWERED from 0.50 — forex trends cleaner, doesn't need as high a bar
+    consensus_threshold: 0.38
     mean_reversion_enabled: true   # Forex ranges reliably; mean reversion is valid
     stop_loss_atr_multiple: 1.5
     take_profit_rr_ratio: 2.0
@@ -251,8 +252,8 @@ asset_class_strategy_config:
       min_momentum: 0.005          # 0.5% min — forex moves in pips, not percent
 
   commodities:
-    min_confidence: 0.52           # Between forex and crypto — metals trend well but slowly
-    consensus_threshold: 0.52
+    min_confidence: 0.40           # LOWERED from 0.52 — between forex and crypto
+    consensus_threshold: 0.40
     mean_reversion_enabled: true   # Gold/silver range widely around macro anchors
     stop_loss_atr_multiple: 2.0    # Metals are volatile intraday; wider stops needed
     take_profit_rr_ratio: 2.5      # Metals can run far on macro catalysts
@@ -267,8 +268,8 @@ asset_class_strategy_config:
       min_momentum: 0.008          # 0.8% min — metals move ~0.5-1% on normal days
 
   stocks:
-    min_confidence: 0.48
-    consensus_threshold: 0.48
+    min_confidence: 0.40         # LOWERED from 0.48
+    consensus_threshold: 0.40
     mean_reversion_enabled: true
     stop_loss_atr_multiple: 2.0
     take_profit_rr_ratio: 2.0
