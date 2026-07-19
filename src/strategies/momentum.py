@@ -125,15 +125,18 @@ class MomentumStrategy(BaseStrategy):
         bullish_score = sum(bullish_conditions)
         bearish_score = sum(bearish_conditions)
 
-        if bullish_score >= 3:
+        # Lowered from >=3 to >=2 of 4 conditions — requiring 3/4 was too strict in
+        # choppy markets and produced very few signals. Confidence still scales with
+        # bullish_score/4.0, so a 2/4 signal is naturally lower-confidence than 3/4 or 4/4.
+        if bullish_score >= 2:
             signal     = Signal.BUY
             confidence = min(bullish_score / 4.0 * 0.8 + abs(momentum) * 5, 0.85)
-            reason     = (f"Bullish momentum [{asset_class}]: "
+            reason     = (f"Bullish momentum [{asset_class}] ({bullish_score}/4 conditions): "
                           f"RSI={rsi_cur:.1f}, MACD={macd_hist:.4f}, Momentum={momentum*100:.2f}%")
-        elif bearish_score >= 3:
+        elif bearish_score >= 2:
             signal     = Signal.SELL
             confidence = min(bearish_score / 4.0 * 0.8 + abs(momentum) * 5, 0.85)
-            reason     = (f"Bearish momentum [{asset_class}]: "
+            reason     = (f"Bearish momentum [{asset_class}] ({bearish_score}/4 conditions): "
                           f"RSI={rsi_cur:.1f}, MACD={macd_hist:.4f}, Momentum={momentum*100:.2f}%")
 
         stop_loss = take_profit = None
