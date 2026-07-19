@@ -136,18 +136,13 @@ class TrendFollowingStrategy(BaseStrategy):
         macd_signal = macd['signal'].iloc[-1]    if not macd.empty else 0
         macd_hist   = macd['histogram'].iloc[-1] if not macd.empty else 0
 
-        # For crypto and commodities: require a minimum trend strength before entering
-        # Crypto needs strong trends (ADX >= 30) to avoid whipsaws in volatile markets
-        # Commodities need some trend (ADX >= 22) to avoid news-spike false signals
+        # For crypto and commodities: scale confidence down when trend strength is weak,
+        # instead of hard-blocking the trade. A hard HOLD-with-zero-confidence gate was
+        # filtering out too many valid setups (crypto ADX is often <30 during real trends).
+        # Only a genuinely dead market (ADX near 0) should suppress the signal almost fully.
+        adx_confidence_mult = 1.0
         if asset_class in ('crypto', 'commodities') and adx_value < adx_min_trend:
-            return {
-                'signal': Signal.HOLD, 'confidence': 0.0,
-                'entry_price': current_price,
-                'stop_loss': None, 'take_profit': None,
-                'reason': (f'ADX {adx_value:.1f} < {adx_min_trend} — '
-                           f'trend too weak for {asset_class} entry '
-                           f'(using EMA {fast_period}/{slow_period})')
-            }
+            adx_confidence_mult = max(0.3, adx_value / adx_min_trend) if adx_min_trend > 0 else 0.3
 
         # Crossover detection
         bullish_cross = (fast_prev <= slow_prev) and (fast_current > slow_current)
@@ -222,6 +217,11 @@ class TrendFollowingStrategy(BaseStrategy):
             confidence = min(sum(conf_factors), 0.75)
             reason = (f"Downtrend [{asset_class}] "
                       f"(Fast: {fast_current:.2f} < Slow: {slow_current:.2f}, ADX: {adx_value:.1f})")
+
+        # Apply weak-trend confidence scaling (crypto/commodities ADX gate — see above)
+        confidence = confidence * adx_confidence_mult
+        if adx_confidence_mult < 1.0:
+            reason += f" [ADX-scaled x{adx_confidence_mult:.2f}]"
 
         # Calculate stop-loss and take-profit using per-class ATR multiples
         stop_loss = take_profit = None
