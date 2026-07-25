@@ -1147,7 +1147,7 @@ a{{color:var(--blue);text-decoration:none}}
 @media(max-width:1024px){{.grid2{{grid-template-columns:1fr}}}}
 
 /* = Tables = */
-.tbl-wrap{{overflow-x:auto}}
+.tbl-wrap{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
 table{{width:100%;border-collapse:collapse;font-size:13px}}
 thead th{{
   padding:9px 14px;text-align:left;font-size:10px;font-weight:600;
@@ -1160,6 +1160,42 @@ tbody td{{padding:11px 14px;color:var(--text)}}
 tbody tr:last-child{{border-bottom:none}}
 .sym{{font-weight:600;font-size:13px}}
 .mono{{font-variant-numeric:tabular-nums;font-size:13px}}
+
+/* Mobile position cards (hide wide table on phones) */
+#posCards{{display:none;flex-direction:column;gap:10px}}
+.pos-card{{
+  background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;display:flex;flex-direction:column;gap:10px;
+}}
+.pos-card-top{{display:flex;align-items:center;justify-content:space-between;gap:10px}}
+.pos-card-meta{{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}}
+.pos-card-meta div{{display:flex;flex-direction:column;gap:2px}}
+.pos-card-meta .lbl{{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px}}
+.pos-card-meta .val{{font-size:13px;font-variant-numeric:tabular-nums}}
+.pos-card-actions{{display:flex;justify-content:flex-end}}
+.pos-card-actions .btn-close-pos{{min-height:40px;padding:8px 16px;font-size:13px;width:100%}}
+
+@media(max-width:720px){{
+  #posTableWrap{{display:none}}
+  #posCards{{display:flex}}
+  .card{{padding:14px 14px}}
+  .main{{padding:14px;padding-bottom:max(16px,env(safe-area-inset-bottom))}}
+  .topbar{{padding:0 12px;height:52px}}
+  #lastUpdate{{display:none}}
+  .chart-wrap{{height:200px;min-height:180px}}
+  .chart-wrap2{{height:220px}}
+  .grid2{{gap:14px}}
+  /* Equity first on mobile — chart is easier above a long position list */
+  .grid2 .card:nth-child(2){{order:-1}}
+  .grid2{{display:flex;flex-direction:column}}
+  .mc-val{{font-size:17px}}
+  .tab-nav{{width:100%;}}
+  .tab-btn{{flex:1;text-align:center;padding:8px 10px}}
+}}
+@media(max-width:400px){{
+  .pos-card-meta{{grid-template-columns:1fr}}
+  .chart-wrap{{height:180px}}
+}}
 
 /* = Badges = */
 .badge{{
@@ -1266,13 +1302,14 @@ tbody tr:last-child{{border-bottom:none}}
   <!-- Positions + Chart -->
   <div class="grid2">
     <div class="card">
-      <div class="card-hdr">Open Positions</div>
-      <div class="tbl-wrap">
+      <div class="card-hdr">Open Positions <span id="posCount"></span></div>
+      <div class="tbl-wrap" id="posTableWrap">
         <table>
           <thead><tr><th>Symbol</th><th>Side</th><th class="pos-col-qty">Qty</th><th>Entry</th><th>Current</th><th>Stop Loss</th><th class="pos-col-tp">Take Profit</th><th>P&amp;L</th><th></th></tr></thead>
           <tbody id="posBody"><tr><td colspan="9" style="text-align:center;padding:28px;color:var(--text3)">Loading...</td></tr></tbody>
         </table>
       </div>
+      <div id="posCards"><div style="text-align:center;padding:28px;color:var(--text3)">Loading...</div></div>
     </div>
     <div class="card">
       <div class="card-hdr">Equity Curve</div>
@@ -1416,7 +1453,14 @@ function updateMetrics(data) {{
 // = Positions =
 function updatePositions(pos) {{
   const tb=document.getElementById('posBody');
-  if (!pos||!pos.length) {{ tb.innerHTML='<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text3)">No open positions</td></tr>'; return; }}
+  const cards=document.getElementById('posCards');
+  const countEl=document.getElementById('posCount');
+  if (countEl) countEl.textContent = (pos&&pos.length) ? (pos.length+' open') : '';
+  if (!pos||!pos.length) {{
+    tb.innerHTML='<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text3)">No open positions</td></tr>';
+    if (cards) cards.innerHTML='<div style="text-align:center;padding:28px;color:var(--text3)">No open positions</div>';
+    return;
+  }}
   tb.innerHTML=pos.map(p=>{{
     const sym=p.symbol||'-', side=(p.side||'buy').toLowerCase();
     const qty=parseFloat(p.quantity||0).toLocaleString('en-US',{{maximumFractionDigits:4}});
@@ -1438,6 +1482,35 @@ function updatePositions(pos) {{
       <td><button class="btn-close-pos" onclick="closePos('${{tid}}','${{sym}}','${{side}}')">Close</button></td>
     </tr>`;
   }}).join('');
+  if (cards) {{
+    cards.innerHTML=pos.map(p=>{{
+      const sym=p.symbol||'-', side=(p.side||'buy').toLowerCase();
+      const qty=parseFloat(p.quantity||0).toLocaleString('en-US',{{maximumFractionDigits:4}});
+      const entry=p.entry_price?'$'+parseFloat(p.entry_price).toFixed(4):'-';
+      const cur=p.current_price?'$'+parseFloat(p.current_price).toFixed(4):'-';
+      const sl=p.stop_loss?'$'+parseFloat(p.stop_loss).toFixed(4):'-';
+      const tp=p.take_profit?'$'+parseFloat(p.take_profit).toFixed(4):'-';
+      const pnl=parseFloat(p.pnl||0), tid=p.trade_id;
+      const warn=p.verified_at_broker===false?'&#9888; ':'';
+      return `<div class="pos-card">
+        <div class="pos-card-top">
+          <div><span class="sym">${{warn}}${{sym}}</span>
+            <span class="badge badge-${{side}}" style="margin-left:8px">${{side.toUpperCase()}}</span></div>
+          <div class="${{pClass(pnl)}}" style="font-size:16px;font-weight:700">${{fmt$(pnl)}}</div>
+        </div>
+        <div class="pos-card-meta">
+          <div><span class="lbl">Qty</span><span class="val">${{qty}}</span></div>
+          <div><span class="lbl">Entry</span><span class="val">${{entry}}</span></div>
+          <div><span class="lbl">Current</span><span class="val">${{cur}}</span></div>
+          <div><span class="lbl">Stop</span><span class="val" style="color:var(--neg)">${{sl}}</span></div>
+          <div><span class="lbl">Take profit</span><span class="val" style="color:var(--pos)">${{tp}}</span></div>
+        </div>
+        <div class="pos-card-actions">
+          <button class="btn-close-pos" onclick="closePos('${{tid}}','${{sym}}','${{side}}')">Close position</button>
+        </div>
+      </div>`;
+    }}).join('');
+  }}
 }}
 
 // = Trades =
@@ -1484,19 +1557,28 @@ function initMiniChart(labels, values) {{
     data:{{labels,datasets:[{{
       data:values,borderColor:'#00e676',borderWidth:2,
       backgroundColor:'rgba(0,230,118,.06)',fill:true,tension:.35,
-      pointRadius:0,pointHoverRadius:4,pointHoverBackgroundColor:'#00e676'
+      pointRadius:0,pointHoverRadius:5,pointHoverBackgroundColor:'#00e676'
     }}]}},
     options:{{
       responsive:true,maintainAspectRatio:false,
       interaction:{{mode:'index',intersect:false}},
+      layout:{{padding:{{top:4,right:6,bottom:2,left:2}}}},
       plugins:{{legend:{{display:false}},tooltip:{{
         backgroundColor:'#0f1624',borderColor:'#1e2d45',borderWidth:1,
+        titleFont:{{size:12}},bodyFont:{{size:13}},
+        padding:10,
         callbacks:{{label:ctx=>'$'+parseFloat(ctx.raw).toFixed(2)}}
       }}}},
       scales:{{
         x:{{display:false}},
         y:{{grid:{{color:'rgba(30,45,69,.5)'}},
-            ticks:{{color:'#4a5568',font:{{size:10}},callback:v=>'$'+v.toFixed(0)}},
+            ticks:{{color:'#4a5568',font:{{size:10}},maxTicks:5,
+              callback:v=>{{
+                const n=Number(v);
+                if (Math.abs(n)>=1000) return '$'+(n/1000).toFixed(1)+'k';
+                return '$'+n.toFixed(0);
+              }}
+            }},
             border:{{color:'#1e2d45'}}}}
       }}
     }}
