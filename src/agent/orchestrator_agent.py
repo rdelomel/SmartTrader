@@ -41,15 +41,15 @@ class OrchestratorAgent(BaseAgent):
         self.performance_tracker = performance_tracker
         self.sentiment_analyzer = sentiment_analyzer
         
-        # === FIX 1: Lower default thresholds, read from config ===
-        self.min_confidence = self.config.get('min_confidence', 0.25)  # Was 0.50
-        self.consensus_threshold = self.config.get('consensus_threshold', 0.25)  # Was 0.5
+        # Quality-first defaults (config overrides these)
+        self.min_confidence = self.config.get('min_confidence', 0.48)
+        self.consensus_threshold = self.config.get('consensus_threshold', 0.48)
         self.veto_enabled = self.config.get('veto_enabled', True)
-        self.require_agent_agreement = self.config.get('require_agent_agreement', False)
-        # === FIX 2: Read min_agents_agreeing from config ===
+        self.require_agent_agreement = self.config.get('require_agent_agreement', True)
         self.min_agents_agreeing = self.config.get('min_agents_agreeing', 2)
-        # === FIX 3: Enable shorts for full market coverage ===
-        self.disable_short_trades = self.config.get('disable_short_trades', False)  # Was True
+        # Long-only until long expectancy is proven profitable
+        self.disable_short_trades = self.config.get('disable_short_trades', True)
+        self.risk_reward_ratio = self.config.get('risk_reward_ratio', 3.0)
         
         self.use_drl = self.config.get('use_drl', True) and drl_agent is not None and drl_agent.is_trained
         self.use_llm_conflict_resolution = self.config.get('use_llm_conflict_resolution', True) and sentiment_analyzer is not None
@@ -236,7 +236,7 @@ class OrchestratorAgent(BaseAgent):
                     print(f"  ✅ Calculated default stop loss: ${stop_loss:.2f}")
                 
                 if not take_profit and stop_loss is not None:
-                    risk_reward_ratio = self.config.get('risk_reward_ratio', 2.0)
+                    risk_reward_ratio = self.risk_reward_ratio
                     risk = abs(entry_price - stop_loss)
                     if risk > 0:
                         reward = risk * risk_reward_ratio
@@ -253,7 +253,7 @@ class OrchestratorAgent(BaseAgent):
                 if take_profit is None and stop_loss is not None:
                     risk = abs(entry_price - stop_loss)
                     if risk > 0:
-                        reward = risk * 2.0
+                        reward = risk * self.risk_reward_ratio
                         if is_buy:
                             take_profit = entry_price + reward
                         else:
@@ -268,15 +268,15 @@ class OrchestratorAgent(BaseAgent):
                 if is_buy and take_profit <= entry_price:
                     if stop_loss is not None:
                         risk = abs(entry_price - stop_loss)
-                        take_profit = entry_price + (risk * 2.0)
+                        take_profit = entry_price + (risk * self.risk_reward_ratio)
                     else:
-                        take_profit = entry_price * 1.02
+                        take_profit = entry_price * 1.03
                 elif not is_buy and take_profit >= entry_price:
                     if stop_loss is not None:
                         risk = abs(entry_price - stop_loss)
-                        take_profit = entry_price - (risk * 2.0)
+                        take_profit = entry_price - (risk * self.risk_reward_ratio)
                     else:
-                        take_profit = entry_price * 0.98
+                        take_profit = entry_price * 0.97
                 
                 if stop_loss is not None and take_profit is not None:
                     risk = abs(entry_price - stop_loss)
@@ -749,17 +749,20 @@ class OrchestratorAgent(BaseAgent):
         avg_confidence_all = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                 for name, s in agent_signals.items()) / total_weight if total_weight > 0 else 0.0
         
-        # === FIX 8: Relaxed agent agreement check ===
+        # Hard reject when fewer than min_agents_agreeing vote with the signal
         if self.require_agent_agreement and final_signal != Signal.HOLD:
             agreeing_count = buy_count if final_signal == Signal.BUY else sell_count
             if agreeing_count < self.min_agents_agreeing:
-                print(f"  ⚠️  Low agreement: {agreeing_count}/{self.min_agents_agreeing} agents agree")
-                # Reduce confidence instead of rejecting
-                confidence *= 0.6  # Was: reject trade entirely
-                if agreeing_count == 0:
-                    final_signal = Signal.HOLD
-                    confidence = 0.0
-                print(f"     Reduced confidence to {confidence:.3f} (was going to reject)")
+                print(f"  [SKIP] Insufficient agreement: {agreeing_count}/{self.min_agents_agreeing} agents agree")
+                print(f"     Rejecting trade - require multiple agent agreement for higher quality signals")
+                final_signal = Signal.HOLD
+                confidence = 0.0
+
+        # Long-only mode: convert SELL to HOLD (execution layer also blocks)
+        if self.disable_short_trades and final_signal == Signal.SELL:
+            print(f"  [SKIP] Short trades disabled - converting SELL to HOLD")
+            final_signal = Signal.HOLD
+            confidence = 0.0
         
         # Safety checks
         if sell_count >= 2 and buy_count == 0 and final_signal == Signal.BUY:

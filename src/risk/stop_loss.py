@@ -21,9 +21,15 @@ class StopLossManager:
             time_based_stop_hours: Exit if no movement after X hours (default: None)
         """
         self.config = config or {}
-        self.stop_loss_atr_multiplier = self.config.get('stop_loss_atr_multiplier', 2.0)
+        # Prefer risk.* ATR multiple keys used in trading_config.yaml
+        self.stop_loss_atr_multiplier = self.config.get(
+            'stop_loss_atr_multiplier',
+            self.config.get('default_stop_loss_atr_multiple', 2.0),
+        )
         self.trailing_stop_enabled = self.config.get('trailing_stop_enabled', True)
         self.trailing_stop_atr_multiplier = self.config.get('trailing_stop_atr_multiplier', 1.5)
+        self.trailing_activation_rr = float(self.config.get('trailing_activation_rr', 1.0))
+        self.trailing_min_lock_rr = float(self.config.get('trailing_min_lock_rr', 0.5))
         self.time_based_stop_hours = self.config.get('time_based_stop_hours', None)
         self.indicators = TechnicalIndicators()
     
@@ -72,49 +78,57 @@ class StopLossManager:
         data: pd.DataFrame
     ) -> float:
         """
-        Update trailing stop loss
-        
-        Args:
-            current_price: Current market price
-            entry_price: Original entry price
-            current_stop_loss: Current stop loss level
-            side: 'buy' or 'sell'
-            data: Market data for ATR calculation
-        
-        Returns:
-            Updated stop loss price
+        Update trailing stop loss.
+
+        Trail only activates after unrealized profit >= trailing_activation_rr * initial risk.
+        Once trailing, the stop never locks in less than trailing_min_lock_rr * initial risk
+        (avoids truncating winners into ~1:1 outcomes).
         """
         if not self.trailing_stop_enabled:
             return current_stop_loss
-        
-        # Calculate ATR (with robust fallback when ATR is NaN due to short history)
+
+        initial_risk = abs(entry_price - current_stop_loss)
+        # Prefer risk from original stop distance when stop already trailed past entry
+        # Recompute risk from entry vs the farther of current stop and a synthetic stop
+        if side == 'buy':
+            risk_from_stop = max(entry_price - current_stop_loss, 0.0)
+        else:
+            risk_from_stop = max(current_stop_loss - entry_price, 0.0)
+
+        # If stop already moved to/through breakeven, recover initial risk from ATR
         atr = self.indicators.atr(data)
         atr_value = atr.iloc[-1] if not atr.empty else np.nan
-
         if pd.isna(atr_value) or atr_value <= 0:
             atr_value = current_price * 0.02
-        
-        # Calculate trailing stop distance
-        trailing_distance = atr_value * self.trailing_stop_atr_multiplier
-        
+        initial_risk = risk_from_stop if risk_from_stop > 0 else (atr_value * self.stop_loss_atr_multiplier)
+        if initial_risk <= 0:
+            return current_stop_loss
+
         if side == 'buy':
-            # For long positions, trail stop loss upward
+            unrealized_r = (current_price - entry_price) / initial_risk
+        else:
+            unrealized_r = (entry_price - current_price) / initial_risk
+
+        if unrealized_r < self.trailing_activation_rr:
+            return current_stop_loss
+
+        trailing_distance = atr_value * self.trailing_stop_atr_multiplier
+        min_lock = entry_price + (self.trailing_min_lock_rr * initial_risk) if side == 'buy' \
+            else entry_price - (self.trailing_min_lock_rr * initial_risk)
+
+        if side == 'buy':
             new_stop_loss = current_price - trailing_distance
-            
-            # Only move stop loss up, never down
+            # Never lock below min_lock once activated
+            new_stop_loss = max(new_stop_loss, min_lock)
             if new_stop_loss > current_stop_loss:
                 return new_stop_loss
-            else:
-                return current_stop_loss
-        else:  # sell
-            # For short positions, trail stop loss downward
+            return current_stop_loss
+        else:
             new_stop_loss = current_price + trailing_distance
-            
-            # Only move stop loss down, never up
+            new_stop_loss = min(new_stop_loss, min_lock)
             if new_stop_loss < current_stop_loss:
                 return new_stop_loss
-            else:
-                return current_stop_loss
+            return current_stop_loss
     
     def check_stop_loss(self, current_price: float, stop_loss: float, side: str) -> bool:
         """

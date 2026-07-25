@@ -1,12 +1,12 @@
 # ============================================================
-# SmartTrader Configuration v3
-# Updated: 2026-06-13
-# Changes from v3.0:
-#   - Fixed crypto symbol format: BTC/USDT -> BTC/USD (Alpaca standard)
-#   - Replaced BNB/USDT with AVAX/USD (Alpaca supports AVAX, not BNB)
-#   - Added commodities asset class: XAU_USD (Gold), XAG_USD (Silver)
-#   - Added commodities to asset_class_strategy_config with calibrated params
-#   - Commodities use OANDA broker (same as forex, native bracket orders)
+# SmartTrader Configuration v3.1
+# Updated: 2026-07-25
+# Changes from v3 (profitability / drought fix):
+#   - Raise quality gates (0.48/0.50) — do NOT chase volume via 0.35
+#   - disable_short_trades: true until long-only expectancy is positive
+#   - Prune scalping/news/EOD/day_trading on 1h; reweight remaining to 1.0
+#   - Global R:R 1:3; trail activates after 1R (see stop_loss.py)
+#   - Pattern forecaster wired into orchestrator (main.py)
 # ============================================================
 
 # Signal Log Mode
@@ -33,7 +33,7 @@ agents:
 
   sentiment:
     enabled: true
-    sentiment_threshold: 0.30    # Lowered from 0.35 for calibration
+    sentiment_threshold: 0.30
 
   fundamental:
     enabled: true
@@ -41,18 +41,18 @@ agents:
   quantitative:
     enabled: true
     lookback_period: 100
-    min_confidence: 0.45         # Lowered from 0.50 for calibration
+    min_confidence: 0.48
     use_statistical_models: true
     use_momentum_models: true
-    use_mean_reversion_models: true   # Re-enabled: separate toggle per regime
+    use_mean_reversion_models: true
 
   pattern_forecaster:
     enabled: true
     pattern_length: 20
     lookahead_periods: 10
-    min_matches: 2               # Lowered from 3 - more signals for calibration
-    similarity_threshold: 0.60   # Lowered from 0.70 - wider net
-    correlation_threshold: 0.55  # Lowered from 0.60
+    min_matches: 3
+    similarity_threshold: 0.65
+    correlation_threshold: 0.60
     historical_lookback_days: 180
     max_historical_records: 5000
     max_historical_bars: 2000
@@ -72,92 +72,93 @@ agents:
     max_slippage_bps: 10
     veto_enabled: true
     circuit_breaker:
-      # ATR-based thresholds - more adaptive than fixed %
       use_atr_based: true
-      daily_loss_atr_multiple: 2.5    # Trip after 2.5x ATR daily loss
-      hourly_loss_atr_multiple: 1.2   # Trip after 1.2x ATR hourly loss
-      # Fallback fixed % if ATR is unavailable
+      daily_loss_atr_multiple: 2.5
+      hourly_loss_atr_multiple: 1.2
       max_daily_loss_percent: 2.5
       max_hourly_loss_percent: 1.0
       max_drawdown_percent: 5.0
-      cooling_period_hours: 2          # Reduced from 4 - less downtime per trip
+      cooling_period_hours: 2
 
   orchestrator:
     enabled: true
-    min_confidence: 0.35         # LOWERED from 0.42 - too few trades were passing gate
-    consensus_threshold: 0.35    # LOWERED from 0.42 - too few trades were passing gate
+    min_confidence: 0.48         # Quality over volume (was 0.35)
+    consensus_threshold: 0.48
     require_agent_agreement: true
-    min_agents_agreeing: 2       # Lowered from 3 — code now actually reads this (was hardcoded to 2 and ignoring this key)
-    disable_short_trades: false  # Was hard-defaulting true in code with no config key at all — re-enabled for paper-trading research
+    min_agents_agreeing: 2       # Hard reject below this (orchestrator)
+    disable_short_trades: true   # Long-only until expectancy proven
+    risk_reward_ratio: 3.0       # Must match risk.default_take_profit_rr_ratio
+    # Voting weights (normalized in code if they do not sum to 1.0)
+    technical_weight: 0.35
+    sentiment_weight: 0.15
+    fundamental_weight: 0.10
+    quantitative_weight: 0.25
+    pattern_forecaster_weight: 0.15
 
 # Strategy Weights (MUST sum to 1.0)
-# All 9 implemented strategies enabled for paper-trading research — this is a
-# deliberate "run everything, see what actually works" phase. The dashboard's
-# Strategy Leaderboard (grouped by trade.strategy) tracks win rate / profit
-# factor / expectancy per strategy so underperformers can be pruned or
-# reweighted with real data instead of guesswork. Arbitrage is excluded —
-# it's an unimplemented stub (always HOLD).
+# Pruned for 1h timeframe: disabled scalping/news/EOD/day_trading
 strategies:
   trend_following:
     enabled: true
-    weight: 0.18
+    weight: 0.28
     regimes: [trending]
 
   momentum:
     enabled: true
-    weight: 0.14
+    weight: 0.20
     regimes: [trending, neutral]
 
   breakout:
     enabled: true
-    weight: 0.14
+    weight: 0.18
     regimes: [trending, volatile]
 
   mean_reversion:
     enabled: true               # auto-disables itself for crypto (see strategy code)
-    weight: 0.10
+    weight: 0.12
     regimes: [ranging]
 
   day_trading:
-    enabled: true
-    weight: 0.10
+    enabled: false              # Conflicts with swing on 1h
+    weight: 0.0
     regimes: [trending, neutral, ranging]
 
   volatility:
-    enabled: true                # NEWLY ENABLED — BB/ATR regime strategy, good fit for metals
-    weight: 0.10
+    enabled: true
+    weight: 0.12
     regimes: [volatile, ranging]
 
   swing_trading:
-    enabled: true                # NEWLY ENABLED — multi-day swing positions
-    weight: 0.08
+    enabled: true
+    weight: 0.10
     regimes: [trending, ranging]
 
   news_trading:
-    enabled: true                # NEWLY ENABLED — reacts to news-driven volatility spikes
-    weight: 0.06
+    enabled: false              # Too noisy on 1h research blend
+    weight: 0.0
     regimes: [volatile]
 
   end_of_day:
-    enabled: true                # NEWLY ENABLED — session-close momentum/reversal
-    weight: 0.05
+    enabled: false              # Session-close logic conflicts with 1h bars
+    weight: 0.0
     regimes: [trending, neutral, ranging]
 
   scalping:
-    enabled: true                # NEWLY ENABLED for research — real execution latency still
-    weight: 0.05                 # applies even in paper mode, so treat results with caution
+    enabled: false              # Latency-sensitive; unsuitable for this loop
+    weight: 0.0
+    regimes: [trending, neutral, ranging]
 
 # Asset Classes & Symbols
 assets:
   crypto:
     enabled: true
-    broker: alpaca              # Alpaca is the active crypto broker (Binance not yet integrated)
+    broker: alpaca
     fallback_broker: alpaca
     symbols:
-      - BTC/USD                 # Fixed: was BTC/USDT (Alpaca uses USD not USDT)
-      - ETH/USD                 # Fixed: was ETH/USDT
-      - SOL/USD                 # Fixed: was SOL/USDT
-      - AVAX/USD                # Replaced BNB/USDT — Alpaca supports AVAX, not BNB
+      - BTC/USD
+      - ETH/USD
+      - SOL/USD
+      - AVAX/USD
     timeframe: 1h
     max_positions: 2
     trading_hours:
@@ -182,106 +183,116 @@ assets:
 
   commodities:
     enabled: true
-    broker: oanda               # OANDA supports metals natively (XAU_USD, XAG_USD)
+    broker: oanda
     symbols:
-      - XAU_USD                 # Gold — highest liquidity metal on OANDA
-      - XAG_USD                 # Silver — second most liquid
+      - XAU_USD
+      - XAG_USD
     timeframe: 1h
-    max_positions: 1            # Conservative: only 1 metal position at a time
+    max_positions: 1
     trading_hours:
-      start: "01:00"            # Metals open with Tokyo session
-      end: "22:00"              # Close before NY session end
+      start: "01:00"
+      end: "22:00"
       timezone: UTC
       exclude_weekends: true
       allowed_days: [monday, tuesday, wednesday, thursday, friday]
 
   stocks:
-    enabled: false              # Stage 3 - enable after crypto/forex profitable
+    enabled: false
     broker: alpaca
     symbols: []
 
 # Risk Management
 risk:
-  max_portfolio_risk_percent: 2.0   # Max % of portfolio at risk at any time
+  max_portfolio_risk_percent: 2.0
   max_position_size_percent: 4.0
+  position_size_percent: 1.0           # Base risk % before Kelly fraction
   default_stop_loss_atr_multiple: 1.5
-  default_take_profit_rr_ratio: 2.0  # 1:2 R:R
-  position_sizing_method: kelly      # 'fixed' | 'kelly' | 'volatility_adjusted'
-  kelly_fraction: 0.25               # Use 25% Kelly (conservative)
-  max_correlated_positions: 2        # Don't hold >2 highly-correlated positions
+  default_take_profit_rr_ratio: 3.0    # 1:3 R:R — breakeven ~25% WR if realized
+  position_sizing_method: kelly
+  method: kelly                        # PositionSizer reads 'method'
+  kelly_fraction: 0.25
+  max_correlated_positions: 2
+  # Trailing: only after >=1R profit; never lock in less than min_lock_rr
+  trailing_stop_enabled: true
+  trailing_stop_atr_multiplier: 1.5
+  trailing_activation_rr: 1.0          # Activate trail after 1R unrealized
+  trailing_min_lock_rr: 0.5            # Do not trail so tight that locked R < 0.5
+  # If recent PF < min_profit_factor_for_kelly over last N trades, use fixed % risk
+  expectancy_clamp:
+    enabled: true
+    lookback_trades: 30
+    min_profit_factor_for_kelly: 1.3
+    fallback_risk_percent: 0.75        # Conservative fixed risk when expectancy unknown/negative
 
 
 # ============================================================
 # Per-Asset-Class Strategy Configuration
-# These values override the global strategy defaults for each
-# asset type.  Passed into generate_signal(data, symbol) so
-# every symbol gets individually calibrated parameters.
 # ============================================================
 asset_class_strategy_config:
 
   crypto:
-    min_confidence: 0.42         # LOWERED from 0.55 — still tighter than global (crypto whipsaws more)
-    consensus_threshold: 0.42
-    mean_reversion_enabled: false  # Never use mean reversion for crypto
-    stop_loss_atr_multiple: 1.5    # Crypto ATR is already wide; tighten the multiple
-    take_profit_rr_ratio: 2.5      # Higher reward target to offset volatile holding risk
+    min_confidence: 0.52
+    consensus_threshold: 0.52
+    mean_reversion_enabled: false
+    stop_loss_atr_multiple: 1.5
+    take_profit_rr_ratio: 3.0
     trend_following:
-      use_ema: true                # EMA reacts faster to rapid crypto moves than SMA
-      fast_ma_period: 10           # Faster crossover for crypto (SMA 20 is too slow)
-      slow_ma_period: 25           # Faster slow MA (SMA 50 lags badly on crypto)
-      adx_min_trend: 30            # Only trade crypto when ADX signals a strong trend
+      use_ema: true
+      fast_ma_period: 10
+      slow_ma_period: 25
+      adx_min_trend: 30
     momentum:
-      rsi_oversold: 25             # Crypto capitulation reaches deeper oversold levels
-      rsi_overbought: 75           # Crypto euphoria reaches higher overbought levels
-      min_momentum: 0.05           # 5% min — filters out normal 1-2% crypto noise
+      rsi_oversold: 25
+      rsi_overbought: 75
+      min_momentum: 0.05
 
   forex:
-    min_confidence: 0.38         # LOWERED from 0.50 — forex trends cleaner, doesn't need as high a bar
-    consensus_threshold: 0.38
-    mean_reversion_enabled: true   # Forex ranges reliably; mean reversion is valid
+    min_confidence: 0.48
+    consensus_threshold: 0.48
+    mean_reversion_enabled: true
     stop_loss_atr_multiple: 1.5
-    take_profit_rr_ratio: 2.0
+    take_profit_rr_ratio: 3.0
     trend_following:
-      use_ema: true                # EMA still preferred over SMA for responsiveness
+      use_ema: true
       fast_ma_period: 10
-      slow_ma_period: 30           # Slightly slower than crypto; forex trends more cleanly
-      adx_min_trend: 20            # Lower bar; forex trends sustain longer
+      slow_ma_period: 30
+      adx_min_trend: 20
     momentum:
-      rsi_oversold: 35             # Forex RSI extremes are less pronounced than crypto
+      rsi_oversold: 35
       rsi_overbought: 65
-      min_momentum: 0.005          # 0.5% min — forex moves in pips, not percent
+      min_momentum: 0.005
 
   commodities:
-    min_confidence: 0.40           # LOWERED from 0.52 — between forex and crypto
-    consensus_threshold: 0.40
-    mean_reversion_enabled: true   # Gold/silver range widely around macro anchors
-    stop_loss_atr_multiple: 2.0    # Metals are volatile intraday; wider stops needed
-    take_profit_rr_ratio: 2.5      # Metals can run far on macro catalysts
-    trend_following:
-      use_ema: true                # EMA preferred; metals spike quickly on news
-      fast_ma_period: 20           # Slower than forex — metals trend on daily/weekly
-      slow_ma_period: 50           # Standard golden cross period for metals
-      adx_min_trend: 22            # Slightly higher than forex; filter ranging sessions
-    momentum:
-      rsi_oversold: 32             # Metal oversold is less extreme than crypto
-      rsi_overbought: 68
-      min_momentum: 0.008          # 0.8% min — metals move ~0.5-1% on normal days
-
-  stocks:
-    min_confidence: 0.40         # LOWERED from 0.48
-    consensus_threshold: 0.40
+    min_confidence: 0.50
+    consensus_threshold: 0.50
     mean_reversion_enabled: true
     stop_loss_atr_multiple: 2.0
-    take_profit_rr_ratio: 2.0
+    take_profit_rr_ratio: 3.0
     trend_following:
-      use_ema: false               # SMA is fine for stocks; less whipsaw
+      use_ema: true
+      fast_ma_period: 20
+      slow_ma_period: 50
+      adx_min_trend: 22
+    momentum:
+      rsi_oversold: 32
+      rsi_overbought: 68
+      min_momentum: 0.008
+
+  stocks:
+    min_confidence: 0.48
+    consensus_threshold: 0.48
+    mean_reversion_enabled: true
+    stop_loss_atr_multiple: 2.0
+    take_profit_rr_ratio: 3.0
+    trend_following:
+      use_ema: false
       fast_ma_period: 20
       slow_ma_period: 50
       adx_min_trend: 20
     momentum:
       rsi_oversold: 30
       rsi_overbought: 70
-      min_momentum: 0.02           # 2% min — standard stock noise filter
+      min_momentum: 0.02
 
 
 # Performance Gates (before enabling live trading)

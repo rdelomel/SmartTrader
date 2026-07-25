@@ -23,9 +23,26 @@ class PositionSizer:
         self.config = config or {}
         self.position_size_percent = self.config.get('position_size_percent', 1.5)
         self.max_position_size_percent = self.config.get('max_position_size_percent', 5.0)
-        self.method = self.config.get('method', 'fixed_fractional')
+        # Accept either 'method' or 'position_sizing_method' from trading_config.yaml
+        raw_method = self.config.get('method') or self.config.get('position_sizing_method', 'fixed_fractional')
+        method_aliases = {
+            'fixed': 'fixed_fractional',
+            'fixed_fractional': 'fixed_fractional',
+            'kelly': 'kelly',
+            'volatility_adjusted': 'volatility_scaled',
+            'volatility_scaled': 'volatility_scaled',
+        }
+        self.method = method_aliases.get(str(raw_method).lower(), 'fixed_fractional')
         self.risk_per_trade = self.config.get('risk_per_trade', None)
         self.indicators = TechnicalIndicators()
+
+        # Expectancy clamp: fall back to fixed % risk when recent PF is weak/unknown
+        clamp_cfg = self.config.get('expectancy_clamp', {}) or {}
+        self.expectancy_clamp_enabled = clamp_cfg.get('enabled', True)
+        self.expectancy_lookback = int(clamp_cfg.get('lookback_trades', 30))
+        self.min_pf_for_kelly = float(clamp_cfg.get('min_profit_factor_for_kelly', 1.3))
+        self.fallback_risk_percent = float(clamp_cfg.get('fallback_risk_percent', 0.75))
+        self._recent_closed_pnls = []  # filled via update_recent_trade_pnls()
         
         # Dynamic scaling configuration
         dynamic_config = self.config.get('dynamic_scaling', {})
@@ -38,7 +55,35 @@ class PositionSizer:
         self.recent_returns = []  # Track recent returns for Sharpe calculation
         self.consecutive_wins = 0  # Track consecutive wins
         self.recent_sharpe = 0.0  # Recent Sharpe ratio
-    
+
+    def update_recent_trade_pnls(self, pnls: list) -> None:
+        """Update recent closed-trade PnLs used by expectancy clamp."""
+        if not pnls:
+            self._recent_closed_pnls = []
+            return
+        self._recent_closed_pnls = [float(p) for p in pnls[-self.expectancy_lookback:]]
+
+    def _recent_profit_factor(self) -> Optional[float]:
+        """Profit factor over recent closed trades, or None if insufficient data."""
+        if len(self._recent_closed_pnls) < 5:
+            return None
+        wins = sum(p for p in self._recent_closed_pnls if p > 0)
+        losses = abs(sum(p for p in self._recent_closed_pnls if p < 0))
+        if losses == 0:
+            return float('inf') if wins > 0 else None
+        return wins / losses
+
+    def _should_use_kelly(self) -> bool:
+        if self.method != 'kelly':
+            return False
+        if not self.expectancy_clamp_enabled:
+            return True
+        pf = self._recent_profit_factor()
+        # Unknown or weak expectancy -> fixed conservative risk instead of Kelly
+        if pf is None:
+            return False
+        return pf >= self.min_pf_for_kelly
+
     def calculate_position_size(
         self,
         account_balance: float,
@@ -122,12 +167,19 @@ class PositionSizer:
             risk_amount = account_balance * (base_risk_percent / 100)
         
         # Calculate base position size
+        sizing_method = self.method
         if self.method == 'fixed_fractional':
             quantity = self._fixed_fractional(risk_amount, risk_per_unit)
         elif self.method == 'volatility_scaled':
             quantity = self._volatility_scaled(account_balance, entry_price, stop_loss, data, risk_amount)
         elif self.method == 'kelly':
-            quantity = self._kelly_criterion(account_balance, entry_price, stop_loss, data)
+            if self._should_use_kelly():
+                quantity = self._kelly_criterion(account_balance, entry_price, stop_loss, data)
+            else:
+                # Negative/unknown expectancy: conservative fixed % of equity at risk
+                sizing_method = 'fixed_fractional_expectancy_clamp'
+                clamped_risk = account_balance * (self.fallback_risk_percent / 100.0)
+                quantity = self._fixed_fractional(clamped_risk, risk_per_unit)
         else:
             quantity = self._fixed_fractional(risk_amount, risk_per_unit)
         
@@ -154,9 +206,9 @@ class PositionSizer:
             'quantity': quantity,
             'value': position_value,
             'risk_amount': risk_amount,
-            'risk_percent': (risk_amount / account_balance) * 100,
+            'risk_percent': (risk_amount / account_balance) * 100 if account_balance else 0.0,
             'base_risk_percent': base_risk_percent,
-            'method': self.method,
+            'method': sizing_method,
             'reason': 'Position size calculated',
             'dynamic_scaling_applied': self.dynamic_scaling_enabled
         }

@@ -217,6 +217,25 @@ class TradingAgent:
             print(f"[INIT] Initializing risk management...")
             self.position_sizer = PositionSizer(self.trading_config.get('risk', {}))
             self.stop_loss_manager = StopLossManager(self.trading_config.get('risk', {}))
+            self._sync_position_sizer_expectancy()
+            
+            # Structured skip counters for drought diagnosis (ASCII-safe logging)
+            self.skip_counters = {
+                'hold': 0,
+                'low_conf': 0,
+                'agreement': 0,
+                'short_disabled': 0,
+                'kill_switch': 0,
+                'circuit_breaker': 0,
+                'hours': 0,
+                'max_positions': 0,
+                'signal_log_mode': 0,
+                'veto': 0,
+                'qty_zero': 0,
+                'other': 0,
+            }
+            self._skip_log_every = 25
+            self._skips_since_log = 0
             
             # Create main drawdown manager (for backward compatibility and aggregated tracking)
             self.drawdown_manager = DrawdownManager(self.trading_config.get('risk', {}))
@@ -312,14 +331,19 @@ class TradingAgent:
                             print(f"Error loading DRL model: {e}")
             
             # 6. Orchestrator Agent (performance_tracker already initialized above)
-            orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
+            orchestrator_config = dict(self.trading_config.get('agents', {}).get('orchestrator', {}) or {})
             orchestrator_config['use_drl'] = aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True)
+            # Keep R:R in sync with risk.default_take_profit_rr_ratio
+            risk_cfg = self.trading_config.get('risk', {}) or {}
+            if 'risk_reward_ratio' not in orchestrator_config:
+                orchestrator_config['risk_reward_ratio'] = risk_cfg.get('default_take_profit_rr_ratio', 3.0)
             self.orchestrator_agent = OrchestratorAgent(
                 config=orchestrator_config,
                 technical_agent=self.technical_agent,
                 sentiment_agent=self.sentiment_agent,
                 fundamental_agent=self.fundamental_agent,
                 quantitative_agent=self.quantitative_agent,
+                pattern_forecaster_agent=self.pattern_forecaster_agent,
                 regime_agent=self.regime_agent,
                 risk_agent=self.risk_agent,
                 drl_agent=self.drl_agent,
@@ -731,6 +755,85 @@ class TradingAgent:
         except Exception as e:
             print(f"Error training regime agent: {e}")
     
+    def _sync_position_sizer_expectancy(self) -> None:
+        """Feed recent closed PnLs into PositionSizer expectancy clamp."""
+        try:
+            trades = self.storage.get_all_trades(limit=50) or []
+            closed = [
+                t for t in trades
+                if (t.get('status') or '').lower() in ('closed', 'stopped', 'taken_profit')
+            ]
+            pnls = [float(t.get('pnl') or 0.0) for t in closed]
+            self.position_sizer.update_recent_trade_pnls(pnls)
+        except Exception as e:
+            print(f"  [WARN] Could not sync position sizer expectancy: {e}")
+
+    def _record_skip(self, reason_key: str, detail: str = "", symbol: str = "") -> None:
+        """Increment skip counter and periodically dump histogram (ASCII-safe)."""
+        if reason_key not in self.skip_counters:
+            reason_key = 'other'
+        self.skip_counters[reason_key] = self.skip_counters.get(reason_key, 0) + 1
+        self._skips_since_log += 1
+        msg = f"  [SKIP:{reason_key}]"
+        if symbol:
+            msg += f" {symbol}"
+        if detail:
+            msg += f" - {detail}"
+        print(msg)
+        try:
+            self.logger.log_decision({
+                'symbol': symbol,
+                'skip_reason': reason_key,
+                'detail': detail,
+                'skip_counters': dict(self.skip_counters),
+            }, event='trade_skipped')
+        except Exception:
+            pass
+        if self._skips_since_log >= self._skip_log_every:
+            self._skips_since_log = 0
+            print(f"  [SKIP HISTOGRAM] {self.skip_counters}")
+
+    def _symbol_asset_class(self, symbol: str) -> str:
+        """Best-effort map symbol -> asset class from config symbols lists."""
+        sym = (symbol or '').upper().replace('/', '_')
+        assets = self.trading_config.get('assets', {}) or {}
+        for asset_class, cfg in assets.items():
+            for s in cfg.get('symbols', []) or []:
+                if str(s).upper().replace('/', '_') == sym or str(s).upper() == (symbol or '').upper():
+                    return asset_class
+        # Heuristics
+        u = (symbol or '').upper()
+        if any(c in u for c in ['BTC', 'ETH', 'SOL', 'AVAX', 'ADA', 'DOT']):
+            return 'crypto'
+        if 'XAU' in u or 'XAG' in u:
+            return 'commodities'
+        return 'forex'
+
+    def _max_positions_reached(self, symbol: str) -> bool:
+        """Enforce assets.<class>.max_positions against open DB trades."""
+        asset_class = self._symbol_asset_class(symbol)
+        assets_cfg = self.trading_config.get('assets', {}).get(asset_class, {}) or {}
+        max_pos = assets_cfg.get('max_positions')
+        if max_pos is None:
+            return False
+        try:
+            open_trades = self.storage.get_open_trades() or []
+        except Exception:
+            return False
+        count = 0
+        for t in open_trades:
+            if self._symbol_asset_class(t.get('symbol', '')) == asset_class:
+                # Same symbol already open counts; also count other symbols in class
+                count += 1
+        # Allow replace/add only if under cap; if symbol already open, still block new entry
+        already_open = any(
+            (t.get('symbol') or '').upper().replace('/', '_') == (symbol or '').upper().replace('/', '_')
+            for t in open_trades
+        )
+        if already_open:
+            return True
+        return count >= int(max_pos)
+
     def _is_trading_hours(self, asset_class: str) -> bool:
         """
         Check if current time is within trading hours for asset class
@@ -762,7 +865,7 @@ class TradingAgent:
         allowed_days = [d.lower() if isinstance(d, str) else str(d).lower() for d in asset_config.get('allowed_days', [])]
         print(f"  Trading hours check for {asset_class}: day={current_day}, allowed_days={allowed_days}")
         if current_day not in allowed_days:
-            print(f"  â Day {current_day} not in allowed days")
+            print(f"  [SKIP] Day {current_day} not in allowed days")
             return False
 
         # Parse start/end â supports both "HH:MM" strings and integer hours
@@ -903,7 +1006,8 @@ class TradingAgent:
                     kill_switch_brokers.append(f"aggregated ({drawdown:.2f}%)")
                 
                 if kill_switch_active:
-                    print(f"â ï¸  Kill switch ACTIVE: Drawdown exceeds limit on: {', '.join(kill_switch_brokers)}")
+                    print(f"[WARN] Kill switch ACTIVE: Drawdown exceeds limit on: {', '.join(kill_switch_brokers)}")
+                    self._record_skip('kill_switch', detail=', '.join(kill_switch_brokers))
                     self.logger.log_risk_event({
                         'event': 'kill_switch_active',
                         'affected_brokers': kill_switch_brokers
@@ -913,6 +1017,7 @@ class TradingAgent:
                 
                 # Check and retrain models if needed
                 self._check_and_retrain_models()
+                self._sync_position_sizer_expectancy()
                 
                 # Process each asset class
                 assets_config = self.trading_config.get('assets', {})
@@ -935,7 +1040,8 @@ class TradingAgent:
                     if not is_trading_hours:
                         current_day = datetime.now().strftime('%A')
                         current_time = datetime.now().strftime('%H:%M:%S UTC')
-                        print(f"  â¸ï¸  Skipping {asset_class} - not in trading hours (Day: {current_day}, Time: {current_time})")
+                        print(f"  [SKIP] Skipping {asset_class} - not in trading hours (Day: {current_day}, Time: {current_time})")
+                        self._record_skip('hours', detail=f'{asset_class} {current_day} {current_time}')
                         continue
                     
                     # Get broker - handle different asset classes
@@ -1178,13 +1284,27 @@ class TradingAgent:
                           not is_vetoed and
                           not self.trading_config.get('signal_log_mode', False))
             if not will_execute:
-                if signal_value == Signal.HOLD:
-                    reason = f'Signal is HOLD'
+                if self.trading_config.get('signal_log_mode', False):
+                    reason_key = 'signal_log_mode'
+                    reason = 'signal_log_mode enabled - orders blocked'
+                elif signal_value == Signal.HOLD:
+                    reason_text = str(decision.get('reason', '')).lower()
+                    if 'agreement' in reason_text:
+                        reason_key = 'agreement'
+                    else:
+                        reason_key = 'hold'
+                    reason = 'Signal is HOLD'
                 elif confidence <= min_conf:
+                    reason_key = 'low_conf'
                     reason = f'Confidence too low: {confidence:.3f} <= {min_conf:.3f}'
                 elif is_vetoed:
-                    reason = f'Vetoed: {decision.get("reason", "Risk manager veto")}'
+                    reason_key = 'veto'
+                    veto_reason = decision.get("reason", "Risk manager veto")
+                    if 'circuit' in str(veto_reason).lower():
+                        reason_key = 'circuit_breaker'
+                    reason = f'Vetoed: {veto_reason}'
                 else:
+                    reason_key = 'other'
                     reason = 'Unknown reason'
                 
                 # Enhanced logging with signal quality metrics
@@ -1195,30 +1315,19 @@ class TradingAgent:
                         'confidence': agent_data.get('confidence', 0.0)
                     }
                 
-                print(f"  â Trade NOT executed: {reason}")
-                print(f"  ð Signal Quality Metrics:")
+                print(f"  [SKIP] Trade NOT executed: {reason}")
+                print(f"  Signal Quality Metrics:")
                 print(f"     Final Signal: {signal_value.name if hasattr(signal_value, 'name') else signal_value}")
                 print(f"     Final Confidence: {confidence:.3f} (required: {min_conf:.3f})")
                 print(f"     Weighted Score: {decision.get('weighted_score', 0):.3f}")
                 print(f"     Consensus: {decision.get('consensus', {}).get('has_consensus', False)}")
                 print(f"     Agent Signals: {agent_signals_summary}")
                 
-                self.logger.log_decision({
-                    'symbol': symbol,
-                    'reason': reason,
-                    'confidence': confidence,
-                    'min_confidence': min_conf,
-                    'signal': signal_value.name if hasattr(signal_value, 'name') else str(signal_value),
-                    'weighted_score': decision.get('weighted_score', 0),
-                    'consensus': decision.get('consensus', {}),
-                    'agent_signals': agent_signals_summary,
-                    'regime': decision.get('regime', 'Unknown'),
-                    'regime_confidence': decision.get('regime_confidence', 0)
-                }, event='trade_skipped')
+                self._record_skip(reason_key, detail=reason, symbol=symbol)
             else:
                 # Enhanced logging for executed trades
-                print(f"  â Trade WILL be executed - calling _execute_trade()...")
-                print(f"  ð Execution Metrics:")
+                print(f"  [OK] Trade WILL be executed - calling _execute_trade()...")
+                print(f"  Execution Metrics:")
                 print(f"     Signal: {signal_value.name if hasattr(signal_value, 'name') else signal_value}")
                 print(f"     Confidence: {confidence:.3f}")
                 print(f"     Weighted Score: {decision.get('weighted_score', 0):.3f}")
@@ -1413,12 +1522,20 @@ class TradingAgent:
             
             # Determine order side and entry price first (needed for position sizing)
             signal = decision['signal']
-            # CRITICAL: Disable SHORT trades if configured (0% win rate on shorts)
+            # CRITICAL: Disable SHORT trades if configured (0% win rate on shorts historically)
             orchestrator_cfg = self.trading_config.get('agents', {}).get('orchestrator', {})
             disable_shorts = orchestrator_cfg.get('disable_short_trades', True)
             if disable_shorts and (signal == Signal.SELL or (hasattr(signal, 'value') and signal.value == -1)):
-                print(f"  â REJECTED: SHORT trades are disabled (0% win rate)")
+                print(f"  [SKIP] REJECTED: SHORT trades are disabled")
                 print(f"     Signal was SELL, but shorts are disabled by configuration")
+                self._record_skip('short_disabled', detail='SELL blocked by disable_short_trades', symbol=symbol)
+                return
+
+            if self._max_positions_reached(symbol):
+                asset_class = self._symbol_asset_class(symbol)
+                max_pos = self.trading_config.get('assets', {}).get(asset_class, {}).get('max_positions')
+                print(f"  [SKIP] max_positions reached for {asset_class} (cap={max_pos})")
+                self._record_skip('max_positions', detail=f'{asset_class} cap={max_pos}', symbol=symbol)
                 return
             
             side = OrderSide.BUY if signal == Signal.BUY or (hasattr(signal, 'value') and signal.value == 1) else OrderSide.SELL
@@ -1438,8 +1555,9 @@ class TradingAgent:
             
             quantity = position_info.get('quantity', 0)
             if quantity == 0:
-                print(f"  â Trade NOT executed: Position quantity is 0")
+                print(f"  [SKIP] Trade NOT executed: Position quantity is 0")
                 print(f"     Position info: {position_info}")
+                self._record_skip('qty_zero', detail=str(position_info), symbol=symbol)
                 return
             
             # Calculate order value and check available balance BEFORE placing order
@@ -1713,15 +1831,16 @@ class TradingAgent:
                     print(f"  â ï¸  EMERGENCY: Set stop loss to ${stop_loss:.2f} (2% default)")
                 
                 if take_profit is None and stop_loss is not None:
-                    print(f"  â ï¸  WARNING: Take profit is None! Calculating emergency fallback...")
+                    print(f"  [WARN] Take profit is None! Calculating emergency fallback...")
                     risk = abs(entry_price - stop_loss)
+                    rr = float(self.trading_config.get('risk', {}).get('default_take_profit_rr_ratio', 3.0))
                     if risk > 0:
-                        reward = risk * 2.0  # Default 1:2 risk/reward
+                        reward = risk * rr
                         if side == OrderSide.BUY:
                             take_profit = entry_price + reward
                         else:
                             take_profit = entry_price - reward
-                        print(f"  â ï¸  EMERGENCY: Set take profit to ${take_profit:.2f} (1:2 R/R)")
+                        print(f"  [WARN] EMERGENCY: Set take profit to ${take_profit:.2f} (1:{rr:.1f} R/R)")
                 
                 # Successful order - store as open trade with EXECUTED quantity and price
                 trade_data = {
@@ -2462,8 +2581,12 @@ class TradingAgent:
             return
         
         # Get risk/reward ratio from config
-        orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {})
-        risk_reward_ratio = orchestrator_config.get('risk_reward_ratio', 2.0)  # Default 1:2
+        risk_cfg = self.trading_config.get('risk', {}) or {}
+        orchestrator_config = self.trading_config.get('agents', {}).get('orchestrator', {}) or {}
+        risk_reward_ratio = orchestrator_config.get(
+            'risk_reward_ratio',
+            risk_cfg.get('default_take_profit_rr_ratio', 3.0),
+        )
         
         updated_sl_count = 0
         updated_tp_count = 0
