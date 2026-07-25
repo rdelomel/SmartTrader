@@ -82,6 +82,8 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
             exit_price = trade.get('exit_price') or trade.get('price') or entry_price
             status = (trade.get('status') or '').lower()
             display_price = exit_price if status == 'closed' else entry_price
+            strategy = str(trade.get('strategy') or 'unknown')
+            is_sync = '_sync' in strategy.lower()
             return {
                 'trade_id': trade.get('trade_id') or trade.get('order_id') or '',
                 'symbol': trade.get('symbol', ''),
@@ -92,7 +94,10 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
                 'time': trade.get('exit_time') or trade.get('entry_time') or datetime.now().isoformat(),
                 'status': status,
                 'entry_price': float(entry_price or 0.0),
-                'exit_price': float(exit_price or 0.0)
+                'exit_price': float(exit_price or 0.0),
+                'strategy': strategy,
+                'source': 'synced' if is_sync else 'agent',
+                'is_sync': is_sync,
             }
 
         all_trades = app.storage.get_all_trades(limit=1000) if (app.storage and hasattr(app.storage, 'get_all_trades')) else []
@@ -184,7 +189,30 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
         monthly = report_data.get('monthly_analytics', []) if report_data else []
         equity_curve = report_data.get('equity_curve', []) if report_data else []
 
-        realized_pnl = float(general.get('net_profit', sum((t.get('pnl', 0) or 0) for t in closed_trades)) or 0.0)
+        # Prefer agent trades in the recent list; append synced after so Source column is honest
+        agent_trades = [t for t in all_trades if '_sync' not in str(t.get('strategy') or '').lower()]
+        sync_trades = [t for t in all_trades if '_sync' in str(t.get('strategy') or '').lower()]
+        ordered_for_ui = sorted(
+            agent_trades,
+            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+            reverse=True,
+        ) + sorted(
+            sync_trades,
+            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+            reverse=True,
+        )
+        normalized_recent_trades = [_normalize_trade(t) for t in ordered_for_ui[:50]]
+
+        agent_closed = [
+            t for t in closed_trades
+            if '_sync' not in str(t.get('strategy') or '').lower()
+            and abs(t.get('pnl', 0) or 0) >= 0.001
+        ]
+        fallback_net = sum((t.get('pnl', 0) or 0) for t in agent_closed)
+        fallback_wins = sum(1 for t in agent_closed if (t.get('pnl') or 0) > 0)
+        fallback_wr = (fallback_wins / len(agent_closed) * 100.0) if agent_closed else 0.0
+
+        realized_pnl = float(general.get('net_profit', fallback_net) or 0.0)
         unrealized_pnl = float(sum((p.get('pnl', 0) or 0) for p in positions) or 0.0)
         equity = total_balance + unrealized_pnl
         # Derive initial equity by reversing realized P&L from current balance
@@ -205,24 +233,20 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
         denom = max(local_open_count + broker_open_count, 1)
         integrity_score = max(0.0, 100.0 - (mismatch_total / denom) * 100.0)
 
-        normalized_recent_trades = [_normalize_trade(t) for t in sorted(
-            all_trades,
-            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
-            reverse=True
-        )[:50]]
-
         return {
             'equity': float(equity),
             'balance': float(total_balance),
             'positions': positions,
             'trades': normalized_recent_trades,
+            'sync_trade_count': len(sync_trades),
+            'agent_trade_count': len(agent_trades),
             'performance': {
                 'total_return': float(total_return),
                 'realized_pnl': float(realized_pnl),
                 'unrealized_pnl': float(unrealized_pnl),
-                'total_trades': int(general.get('total_trades', len(closed_trades)) or 0),
-                'win_rate': float(general.get('win_rate', 0.0) or 0.0),
-                'loss_rate': float(general.get('loss_rate', 0.0) or 0.0),
+                'total_trades': int(general.get('total_trades', len(agent_closed)) or 0),
+                'win_rate': float(general.get('win_rate', fallback_wr) or 0.0),
+                'loss_rate': float(general.get('loss_rate', (100.0 - fallback_wr) if agent_closed else 0.0) or 0.0),
                 'sharpe_ratio': float(advanced.get('sharpe_ratio', 0.0) or 0.0),
                 'sortino_ratio': float(advanced.get('sortino_ratio', 0.0) or 0.0),
                 'profit_factor': float(general.get('profit_factor', 0.0) or 0.0),
@@ -1106,6 +1130,7 @@ tbody tr:last-child{{border-bottom:none}}
 .badge-buy{{background:rgba(0,230,118,.12);color:var(--pos);border:1px solid rgba(0,230,118,.2)}}
 .badge-sell{{background:rgba(255,77,109,.12);color:var(--neg);border:1px solid rgba(255,77,109,.2)}}
 .badge-synced{{background:rgba(74,85,104,.15);color:var(--text3);border:1px solid var(--border);font-size:9px}}
+.badge-agent{{background:rgba(0,230,118,.12);color:#00e676;border:1px solid rgba(0,230,118,.35);font-size:9px}}
 .badge-warn{{background:rgba(246,173,85,.1);color:var(--warn);border:1px solid rgba(246,173,85,.2)}}
 
 /* P&L colors in tables */
@@ -1217,10 +1242,10 @@ tbody tr:last-child{{border-bottom:none}}
 
   <!-- Recent Trades -->
   <div class="card">
-    <div class="card-hdr">Recent Trades <span>Last 50 trades</span></div>
+    <div class="card-hdr">Recent Trades <span>Agent first, then broker sync</span></div>
     <div id="importedBanner" class="info-banner" style="display:none">
       <span class="ib-icon">&#8505;</span>
-      <div>Trades marked <strong>SYNCED</strong> were imported from your broker on startup &mdash; their P&amp;L shows <strong>$0.00</strong> because SmartTrader only calculates realized P&amp;L for trades it opens and closes itself. These do <em>not</em> count as wins or losses in performance statistics.</div>
+      <div>Rows marked <strong>SYNCED</strong> were imported from the broker (strategy contains <code>_sync</code>). They may show broker P&amp;L but are <em>not</em> SmartTrader agent decisions and are excluded from win rate / profit factor. Use <strong>AGENT</strong> rows to judge the bot.</div>
     </div>
     <div class="tbl-wrap">
       <table>
@@ -1379,15 +1404,19 @@ function updatePositions(pos) {{
 function updateTrades(trades) {{
   const tb=document.getElementById('tradesBody');
   if (!trades||!trades.length) {{ tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text3)">No trades recorded</td></tr>'; return; }}
-  let hasZero=false;
+  let hasSync=false;
   tb.innerHTML=trades.map(t=>{{
     const sym=t.symbol||'-', side=(t.side||'buy').toLowerCase();
     const qty=parseFloat(t.quantity||0).toLocaleString('en-US',{{maximumFractionDigits:4}});
     const price=t.price?'$'+parseFloat(t.price).toFixed(2):'-';
     const pnl=parseFloat(t.pnl||0);
     const ts=fmtDate(t.exit_time||t.entry_time||t.time||t.timestamp);
-    const synced=Math.abs(pnl)<0.001;
-    if(synced) hasZero=true;
+    const strat=(t.strategy||'').toLowerCase();
+    const synced = t.is_sync === true || t.source === 'synced' || strat.includes('_sync');
+    if(synced) hasSync=true;
+    const srcBadge = synced
+      ? '<span class="badge badge-synced">SYNCED</span>'
+      : '<span class="badge badge-agent">AGENT</span>';
     return `<tr>
       <td style="color:var(--text3);font-size:12px">${{ts}}</td>
       <td><span class="sym">${{sym}}</span></td>
@@ -1395,10 +1424,10 @@ function updateTrades(trades) {{
       <td class="mono">${{qty}}</td>
       <td class="mono">${{price}}</td>
       <td class="${{pClass(pnl)}}">${{fmt$(pnl)}}</td>
-      <td>${{synced?'<span class="badge badge-synced">SYNCED</span>':''}}</td>
+      <td>${{srcBadge}}</td>
     </tr>`;
   }}).join('');
-  if(hasZero) document.getElementById('importedBanner').style.display='flex';
+  if(hasSync) document.getElementById('importedBanner').style.display='flex';
 }}
 
 // = Mini equity chart =

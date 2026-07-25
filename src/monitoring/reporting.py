@@ -7,6 +7,16 @@ import numpy as np
 from ..data.data_storage import DataStorage
 
 
+def _is_broker_sync_trade(trade: Dict) -> bool:
+    """True for broker-imported fills (strategy contains _sync)."""
+    return '_sync' in str(trade.get('strategy') or '').lower()
+
+
+def _agent_trades_only(trades: List[Dict]) -> List[Dict]:
+    """Exclude broker-sync imports from agent performance math."""
+    return [t for t in trades if not _is_broker_sync_trade(t)]
+
+
 class TradingReporter:
     """Generate comprehensive trading performance reports"""
     
@@ -25,6 +35,8 @@ class TradingReporter:
         all_trades = self.storage.get_all_trades()
         closed_trades = [t for t in all_trades if t.get('status') == 'closed']
         open_trades = [t for t in all_trades if t.get('status') == 'open']
+        # KPIs / equity curve use agent trades only; leaderboard keeps sync for visibility
+        agent_closed = _agent_trades_only(closed_trades)
         
         # Calculate time periods
         now = datetime.now()
@@ -37,33 +49,33 @@ class TradingReporter:
         def filter_by_period(trades, start_date):
             return [t for t in trades if self._parse_time(t.get('exit_time') or t.get('entry_time')) >= start_date]
         
-        today_trades = filter_by_period(closed_trades, today_start)
-        week_trades = filter_by_period(closed_trades, week_start)
-        month_trades = filter_by_period(closed_trades, month_start)
-        year_trades = filter_by_period(closed_trades, year_start)
+        today_trades = filter_by_period(agent_closed, today_start)
+        week_trades = filter_by_period(agent_closed, week_start)
+        month_trades = filter_by_period(agent_closed, month_start)
+        year_trades = filter_by_period(agent_closed, year_start)
         
         # Calculate general account info
-        general_info = self._calculate_general_info(closed_trades, open_trades)
+        general_info = self._calculate_general_info(agent_closed, open_trades)
         
         # Calculate period statistics
         periods = {
-            'today': self._calculate_period_stats(today_trades, closed_trades),
-            'week': self._calculate_period_stats(week_trades, closed_trades),
-            'month': self._calculate_period_stats(month_trades, closed_trades),
-            'year': self._calculate_period_stats(year_trades, closed_trades),
-            'all': self._calculate_period_stats(closed_trades, closed_trades)
+            'today': self._calculate_period_stats(today_trades, agent_closed),
+            'week': self._calculate_period_stats(week_trades, agent_closed),
+            'month': self._calculate_period_stats(month_trades, agent_closed),
+            'year': self._calculate_period_stats(year_trades, agent_closed),
+            'all': self._calculate_period_stats(agent_closed, agent_closed)
         }
         
         # Calculate advanced statistics
-        advanced_stats = self._calculate_advanced_stats(closed_trades)
+        advanced_stats = self._calculate_advanced_stats(agent_closed)
         
         # Calculate equity curve
-        equity_curve = self._calculate_equity_curve(closed_trades, open_trades)
+        equity_curve = self._calculate_equity_curve(agent_closed, open_trades)
         
         # Calculate monthly analytics
-        monthly_analytics = self._calculate_monthly_analytics(closed_trades)
+        monthly_analytics = self._calculate_monthly_analytics(agent_closed)
         
-        # Calculate per-strategy leaderboard (win rate / profit factor / expectancy)
+        # Leaderboard keeps all strategies (including *_sync) for transparency
         strategy_leaderboard = self._calculate_strategy_leaderboard(closed_trades)
 
         return {
@@ -73,6 +85,8 @@ class TradingReporter:
             'equity_curve': equity_curve,
             'monthly_analytics': monthly_analytics,
             'strategy_leaderboard': strategy_leaderboard,
+            'agent_trade_count': len(agent_closed),
+            'sync_trade_count': len(closed_trades) - len(agent_closed),
             'last_updated': now.isoformat()
         }
     
