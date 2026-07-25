@@ -21,7 +21,12 @@ def _serialize_datetime(obj):
     return obj
 
 
-def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[float] = None) -> FastAPI:
+def create_dashboard_app(
+    storage=None,
+    brokers=None,
+    initial_equity: Optional[float] = None,
+    trading_config: Optional[Dict] = None,
+) -> FastAPI:
     """Create FastAPI dashboard application"""
     app = FastAPI(title="SmartTrader Dashboard")
     @app.get("/health")
@@ -42,6 +47,7 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
     # Store storage and brokers references for API endpoints
     app.storage = storage
     app.brokers = brokers or {}
+    app.trading_config = trading_config or {}
     
     # Initialize reporter
     reporter = TradingReporter(storage) if storage else None
@@ -189,19 +195,29 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
         monthly = report_data.get('monthly_analytics', []) if report_data else []
         equity_curve = report_data.get('equity_curve', []) if report_data else []
 
-        # Prefer agent trades in the recent list; append synced after so Source column is honest
+        # Prefer agent trades in Recent Trades. Hide broker *_sync history unless configured.
+        show_synced = bool(
+            (app.trading_config.get('broker_sync', {}) or {}).get('show_synced_trades_on_dashboard', False)
+        )
         agent_trades = [t for t in all_trades if '_sync' not in str(t.get('strategy') or '').lower()]
         sync_trades = [t for t in all_trades if '_sync' in str(t.get('strategy') or '').lower()]
-        ordered_for_ui = sorted(
-            agent_trades,
-            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
-            reverse=True,
-        ) + sorted(
-            sync_trades,
-            key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
-            reverse=True,
-        )
-        normalized_recent_trades = [_normalize_trade(t) for t in ordered_for_ui[:50]]
+        if show_synced:
+            ui_trades = sorted(
+                agent_trades,
+                key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+                reverse=True,
+            ) + sorted(
+                sync_trades,
+                key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+                reverse=True,
+            )
+        else:
+            ui_trades = sorted(
+                agent_trades,
+                key=lambda x: x.get('exit_time') or x.get('entry_time') or '',
+                reverse=True,
+            )
+        normalized_recent_trades = [_normalize_trade(t) for t in ui_trades[:50]]
 
         agent_closed = [
             t for t in closed_trades
@@ -860,6 +876,30 @@ def create_dashboard_app(storage=None, brokers=None, initial_equity: Optional[fl
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    @app.post("/api/purge_all_trades")
+    async def purge_all_trades(confirm: str = ""):
+        """
+        Wipe all trade history for a clean monitoring baseline.
+        Requires ?confirm=yes. Does not delete OHLCV/market data.
+        Open broker positions may be re-imported on next sync as *_sync.
+        """
+        if confirm != "yes":
+            return {
+                "success": False,
+                "error": "Pass confirm=yes to wipe all trades (e.g. POST /api/purge_all_trades?confirm=yes)",
+            }
+        if not app.storage:
+            return {"success": False, "error": "Storage not available"}
+        try:
+            deleted = app.storage.delete_all_trades()
+            return {
+                "success": True,
+                "deleted": deleted,
+                "message": f"Deleted {deleted} trades. Dashboard metrics reset; new AGENT fills will accumulate from here.",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for real-time updates"""
@@ -1242,10 +1282,10 @@ tbody tr:last-child{{border-bottom:none}}
 
   <!-- Recent Trades -->
   <div class="card">
-    <div class="card-hdr">Recent Trades <span>Agent first, then broker sync</span></div>
+    <div class="card-hdr">Recent Trades <span>Agent fills only</span></div>
     <div id="importedBanner" class="info-banner" style="display:none">
       <span class="ib-icon">&#8505;</span>
-      <div>Rows marked <strong>SYNCED</strong> were imported from the broker (strategy contains <code>_sync</code>). They may show broker P&amp;L but are <em>not</em> SmartTrader agent decisions and are excluded from win rate / profit factor. Use <strong>AGENT</strong> rows to judge the bot.</div>
+      <div>Broker <strong>SYNCED</strong> history is hidden by default. Metrics use agent trades only. Set <code>broker_sync.show_synced_trades_on_dashboard: true</code> to show imports.</div>
     </div>
     <div class="tbl-wrap">
       <table>

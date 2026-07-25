@@ -384,7 +384,8 @@ class TradingAgent:
             self.dashboard_app = create_dashboard_app(
                 storage=self.storage, 
                 brokers=self.brokers,
-                initial_equity=self.initial_equity
+                initial_equity=self.initial_equity,
+                trading_config=self.trading_config,
             )
             print(f"[INIT] Dashboard initialized")
             
@@ -2749,11 +2750,15 @@ class TradingAgent:
         print(f"\n[STARTUP] â Updated {updated_sl_count} positions with stop_loss, {updated_tp_count} positions with take_profit")
     
     def _sync_positions_from_brokers(self):
-        """Sync open positions and orders from all brokers to local database"""
+        """Sync open positions (and optionally filled-order history) from brokers."""
+        sync_cfg = self.trading_config.get('broker_sync', {}) or {}
+        sync_filled_history = bool(sync_cfg.get('sync_filled_order_history', False))
+        sync_open_positions = bool(sync_cfg.get('sync_open_positions', True))
         try:
             for broker_name, broker in self.brokers.items():
-                # Sync orders from Alpaca (if method exists)
-                if hasattr(broker, 'get_orders'):
+                # Optional: import filled order history as *_order_sync closed trades.
+                # Off by default — re-imports hundreds of rows after every DB wipe.
+                if sync_filled_history and hasattr(broker, 'get_orders'):
                     try:
                         # Get filled orders (larger window for better P&L pair matching)
                         orders = broker.get_orders(status='filled', limit=200)
@@ -2885,8 +2890,13 @@ class TradingAgent:
                     except Exception as e:
                         print(f"  Error syncing orders from {broker_name}: {e}")
                         self.logger.log_error(e, {'broker': broker_name, 'action': 'sync_orders'})
+                elif hasattr(broker, 'get_orders'):
+                    print(f"  Skipping filled-order history sync for {broker_name} (broker_sync.sync_filled_order_history=false)")
                 
                 # Sync open positions
+                if not sync_open_positions:
+                    print(f"  Skipping open-position sync for {broker_name} (broker_sync.sync_open_positions=false)")
+                    continue
                 if not hasattr(broker, 'get_open_positions'):
                     continue
                 

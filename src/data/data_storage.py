@@ -528,6 +528,27 @@ class DataStorage:
             return False
         finally:
             session.close()
+
+    def delete_all_trades(self) -> int:
+        """
+        Delete every trade row (fresh monitoring baseline).
+        Does not touch OHLCV or other tables.
+
+        Returns:
+            Number of rows deleted
+        """
+        session = self.get_session()
+        try:
+            count = session.query(Trade).count()
+            session.query(Trade).delete(synchronize_session=False)
+            session.commit()
+            return int(count)
+        except Exception as e:
+            session.rollback()
+            print(f"Error deleting all trades: {e}")
+            return 0
+        finally:
+            session.close()
     
     def get_open_trades(self, symbol: Optional[str] = None) -> List[Dict]:
         """

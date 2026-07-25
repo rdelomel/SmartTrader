@@ -14,6 +14,15 @@
 # Use this for 2 weeks to calibrate thresholds before turning it off
 signal_log_mode: false  # LIVE TRADING ENABLED
 
+# Broker sync (startup)
+# When sync_filled_order_history is true, Alpaca/OANDA filled orders are imported
+# into trading.db as *_order_sync and flood Recent Trades after every wipe/restart.
+# Keep false for clean agent-only monitoring. Open positions still sync below.
+broker_sync:
+  sync_filled_order_history: false
+  sync_open_positions: true
+  show_synced_trades_on_dashboard: false
+
 # Aggressive Trading Mode
 aggressive_mode:
   enabled: true
