@@ -47,8 +47,8 @@ class OrchestratorAgent(BaseAgent):
         self.veto_enabled = self.config.get('veto_enabled', True)
         self.require_agent_agreement = self.config.get('require_agent_agreement', True)
         self.min_agents_agreeing = self.config.get('min_agents_agreeing', 2)
-        # Long-only until long expectancy is proven profitable
-        self.disable_short_trades = self.config.get('disable_short_trades', True)
+        # Default false so YAML disable_short_trades:false is not overridden by a True fallback
+        self.disable_short_trades = self.config.get('disable_short_trades', False)
         self.risk_reward_ratio = self.config.get('risk_reward_ratio', 3.0)
         
         self.use_drl = self.config.get('use_drl', True) and drl_agent is not None and drl_agent.is_trained

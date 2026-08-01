@@ -670,8 +670,12 @@ def create_dashboard_app(
     async def get_dashboard_api():
         """Get trusted dashboard data as JSON, reconciled with broker positions."""
         try:
+            # Preserve agent-pushed skip counters across snapshot rebuilds
+            prev_skips = dict(dashboard_data.get('skip_counters') or {})
             snapshot = _build_trusted_dashboard_snapshot()
             dashboard_data.update(snapshot)
+            if prev_skips and not dashboard_data.get('skip_counters'):
+                dashboard_data['skip_counters'] = prev_skips
         except Exception as e:
             print(f"Error loading dashboard data from database: {e}")
 
@@ -1332,6 +1336,12 @@ tbody tr:last-child{{border-bottom:none}}
     </div>
   </div>
 
+  <!-- Why no trades? -->
+  <div class="card" id="skipCard">
+    <div class="card-hdr">Skip reasons <span>why signals did not become orders</span></div>
+    <div id="skipBody" style="display:flex;flex-wrap:wrap;gap:8px;color:var(--text3);font-size:12px">Waiting for agent loop...</div>
+  </div>
+
 </div><!-- /dashboard -->
 
 <!-- = REPORTS TAB = -->
@@ -1448,6 +1458,21 @@ function updateMetrics(data) {{
   const artifact = lr>=99.9 && wr<0.1;
   document.getElementById('mcLoss').className = 'mc'+(artifact?' warn-state':'');
   if (artifact) document.getElementById('importedBanner').style.display='flex';
+
+  updateSkipCounters(data.skip_counters||{{}});
+}}
+
+function updateSkipCounters(skips) {{
+  const el=document.getElementById('skipBody'); if(!el) return;
+  const entries=Object.entries(skips).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  if(!entries.length) {{
+    el.innerHTML='<span style="color:var(--text3)">No skips recorded yet (agent loop may still be starting).</span>';
+    return;
+  }}
+  el.innerHTML=entries.map(([k,v])=>
+    `<span style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 10px">`+
+    `<strong style="color:var(--text)">${{k}}</strong>: ${{v}}</span>`
+  ).join('');
 }}
 
 // = Positions =

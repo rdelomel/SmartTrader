@@ -91,12 +91,12 @@ agents:
 
   orchestrator:
     enabled: true
-    min_confidence: 0.48         # Quality over volume (was 0.35)
-    consensus_threshold: 0.48
+    min_confidence: 0.42         # Eased from 0.48 — zero trades for a week was too selective
+    consensus_threshold: 0.42
     require_agent_agreement: true
-    min_agents_agreeing: 2       # Hard reject below this (orchestrator)
-    disable_short_trades: true   # Long-only until expectancy proven
-    risk_reward_ratio: 3.0       # Must match risk.default_take_profit_rr_ratio
+    min_agents_agreeing: 2
+    disable_short_trades: false  # Re-enabled — long-only starved entries when signals were SELL-heavy
+    risk_reward_ratio: 3.0
     # Voting weights (normalized in code if they do not sum to 1.0)
     technical_weight: 0.35
     sentiment_weight: 0.15
@@ -240,8 +240,8 @@ risk:
 asset_class_strategy_config:
 
   crypto:
-    min_confidence: 0.52
-    consensus_threshold: 0.52
+    min_confidence: 0.45         # Eased from 0.52 — still above orchestrator
+    consensus_threshold: 0.45
     mean_reversion_enabled: false
     stop_loss_atr_multiple: 1.5
     take_profit_rr_ratio: 3.0

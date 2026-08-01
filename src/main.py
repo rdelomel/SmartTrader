@@ -1525,7 +1525,7 @@ class TradingAgent:
             signal = decision['signal']
             # CRITICAL: Disable SHORT trades if configured (0% win rate on shorts historically)
             orchestrator_cfg = self.trading_config.get('agents', {}).get('orchestrator', {})
-            disable_shorts = orchestrator_cfg.get('disable_short_trades', True)
+            disable_shorts = orchestrator_cfg.get('disable_short_trades', False)
             if disable_shorts and (signal == Signal.SELL or (hasattr(signal, 'value') and signal.value == -1)):
                 print(f"  [SKIP] REJECTED: SHORT trades are disabled")
                 print(f"     Signal was SELL, but shorts are disabled by configuration")
@@ -3665,7 +3665,8 @@ class TradingAgent:
                 'risk_metrics': {
                     **(self.drawdown_manager.get_status() if hasattr(self, 'drawdown_manager') else {}),
                     'alerts': alerts
-                }
+                },
+                'skip_counters': dict(getattr(self, 'skip_counters', {}) or {}),
             }
             
             self.dashboard_app.update_dashboard_data(dashboard_data)
