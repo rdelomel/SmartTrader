@@ -810,30 +810,75 @@ class TradingAgent:
             return 'commodities'
         return 'forex'
 
+    def _normalize_position_symbol(self, symbol: str) -> str:
+        """Normalize broker/DB symbols to comparable BASE/QUOTE form."""
+        sym = (symbol or '').replace('_', '/')
+        if '/' not in sym and len(sym) >= 6:
+            for base_len in (3, 4):
+                if len(sym) > base_len:
+                    base, quote = sym[:base_len], sym[base_len:]
+                    if quote in ('USD', 'EUR', 'GBP', 'JPY'):
+                        return f"{base}/{quote}"
+        return sym
+
     def _max_positions_reached(self, symbol: str) -> bool:
-        """Enforce assets.<class>.max_positions against open DB trades."""
+        """Enforce assets.<class>.max_positions using broker opens (ignore DB phantoms)."""
         asset_class = self._symbol_asset_class(symbol)
         assets_cfg = self.trading_config.get('assets', {}).get(asset_class, {}) or {}
         max_pos = assets_cfg.get('max_positions')
         if max_pos is None:
             return False
+
+        norm_target = self._normalize_position_symbol(symbol).upper()
+        broker_opens = []
+        brokers_ok = False
+        for broker in (self.brokers or {}).values():
+            try:
+                if not hasattr(broker, 'get_open_positions'):
+                    continue
+                for pos in broker.get_open_positions() or []:
+                    brokers_ok = True
+                    pos_sym = self._normalize_position_symbol(pos.get('symbol', ''))
+                    if self._symbol_asset_class(pos_sym) == asset_class:
+                        broker_opens.append(pos_sym.upper())
+            except Exception:
+                continue
+
+        if brokers_ok:
+            if norm_target in broker_opens:
+                return True
+            return len(broker_opens) >= int(max_pos)
+
+        # Brokers unreachable: fall back to DB but do not treat every row as real —
+        # only count opens newer than 30 minutes (avoids permanent phantom lockout).
         try:
             open_trades = self.storage.get_open_trades() or []
         except Exception:
             return False
-        count = 0
+        now = datetime.now()
+        recent = []
         for t in open_trades:
-            if self._symbol_asset_class(t.get('symbol', '')) == asset_class:
-                # Same symbol already open counts; also count other symbols in class
-                count += 1
-        # Allow replace/add only if under cap; if symbol already open, still block new entry
+            if self._symbol_asset_class(t.get('symbol', '')) != asset_class:
+                continue
+            entry_time = t.get('entry_time')
+            if isinstance(entry_time, str):
+                try:
+                    from dateutil import parser
+                    entry_time = parser.parse(entry_time)
+                except Exception:
+                    entry_time = None
+            if isinstance(entry_time, datetime):
+                age_min = (now - entry_time.replace(tzinfo=None)).total_seconds() / 60.0
+                if age_min > 30:
+                    continue
+            recent.append(t)
         already_open = any(
-            (t.get('symbol') or '').upper().replace('/', '_') == (symbol or '').upper().replace('/', '_')
-            for t in open_trades
+            self._normalize_position_symbol(t.get('symbol', '')).upper() == norm_target
+            for t in recent
         )
         if already_open:
             return True
-        return count >= int(max_pos)
+        return len(recent) >= int(max_pos)
 
     def _is_trading_hours(self, asset_class: str) -> bool:
         """
@@ -3228,153 +3273,101 @@ class TradingAgent:
             print(f"  [Purge] Error: {e}")
             self.logger.log_error(e, {'component': 'purge_zero_pnl'})
 
-    def _cleanup_phantom_trades(self):
+    def _cleanup_phantom_trades(self, grace_minutes: float = 10.0):
         """
-        Clean up phantom trades - trades in database that don't exist in brokers.
-        This ensures database and broker APIs are in sync.
+        Remove local open trades that are not present at any reachable broker.
+        Match on symbol+side only (no price tolerance — that left phantoms forever).
+        Only delete after a short grace window so fills can settle.
         """
         try:
-            # Get all open trades from database
             open_trades = self.storage.get_open_trades()
             if not open_trades:
                 print("  No open trades in database to check")
                 return
-            
-            # Get all open positions from all brokers
-            broker_positions_by_symbol = {}  # {symbol: [positions]}
+
+            # Build set of (symbol_key, side) from brokers. Empty set is valid if APIs succeed.
+            broker_keys = set()
+            brokers_ok = 0
             for broker_name, broker in self.brokers.items():
                 try:
-                    if hasattr(broker, 'get_open_positions'):
-                        broker_positions = broker.get_open_positions()
-                        for pos in broker_positions:
-                            raw_symbol = pos.get('symbol', '')
-                            symbol = raw_symbol.replace('_', '/')
-                            
-                            # Handle Alpaca crypto format: ETHUSD -> ETH/USD
-                            if '/' not in symbol and len(symbol) >= 6:
-                                for base_len in [3, 4]:
-                                    if len(symbol) > base_len:
-                                        base = symbol[:base_len]
-                                        quote = symbol[base_len:]
-                                        if quote in ['USD', 'EUR', 'GBP', 'JPY']:
-                                            symbol = f"{base}/{quote}"
-                                            break
-                            
-                            if symbol not in broker_positions_by_symbol:
-                                broker_positions_by_symbol[symbol] = []
-                            broker_positions_by_symbol[symbol].append({
-                                'broker': broker_name,
-                                'side': pos.get('side', 'buy'),
-                                'quantity': pos.get('quantity', 0),
-                                'entry_price': pos.get('entry_price', 0),
-                                'position': pos
-                            })
+                    if not hasattr(broker, 'get_open_positions'):
+                        continue
+                    broker_positions = broker.get_open_positions()
+                    if broker_positions is None:
+                        continue
+                    brokers_ok += 1
+                    for pos in broker_positions:
+                        sym = self._normalize_position_symbol(pos.get('symbol', '')).upper()
+                        side = str(pos.get('side', 'buy')).lower()
+                        # Also index without slash for USDJPY vs USD/JPY
+                        broker_keys.add((sym, side))
+                        broker_keys.add((sym.replace('/', ''), side))
                 except Exception as e:
-                    print(f"  â ï¸  Error getting positions from {broker_name}: {e}")
+                    print(f"  [WARN] Error getting positions from {broker_name}: {e}")
                     continue
-            
-            # Check each database trade against broker positions
+
+            if brokers_ok == 0:
+                print("  [WARN] Skipping phantom cleanup — no broker position APIs reachable")
+                return
+
             phantom_trades = []
             for trade in open_trades:
-                trade_id = trade.get('trade_id')
-                symbol = trade.get('symbol', '').replace('_', '/')
-                side = trade.get('side', 'buy').lower()
-                entry_price = trade.get('entry_price', 0)
-                quantity = trade.get('quantity', 0)
-                
-                # Normalize symbol for comparison
-                if '/' not in symbol and len(symbol) >= 6:
-                    for base_len in [3, 4]:
-                        if len(symbol) > base_len:
-                            base = symbol[:base_len]
-                            quote = symbol[base_len:]
-                            if quote in ['USD', 'EUR', 'GBP', 'JPY']:
-                                symbol = f"{base}/{quote}"
-                                break
-                
-                # Check if this trade exists in any broker
-                found_in_broker = False
-                matching_broker = None
-                
-                # Check all broker positions for this symbol
-                for check_symbol, broker_positions in broker_positions_by_symbol.items():
-                    # Normalize check_symbol
-                    check_symbol_normalized = check_symbol.replace('_', '/')
-                    if '/' not in check_symbol_normalized and len(check_symbol_normalized) >= 6:
-                        for base_len in [3, 4]:
-                            if len(check_symbol_normalized) > base_len:
-                                base = check_symbol_normalized[:base_len]
-                                quote = check_symbol_normalized[base_len:]
-                                if quote in ['USD', 'EUR', 'GBP', 'JPY']:
-                                    check_symbol_normalized = f"{base}/{quote}"
-                                    break
-                    
-                    # Check if symbols match
-                    if check_symbol_normalized == symbol or check_symbol == symbol:
-                        for broker_pos in broker_positions:
-                            broker_side = broker_pos['side'].lower() if isinstance(broker_pos['side'], str) else str(broker_pos['side']).lower()
-                            broker_price = broker_pos['entry_price']
-                            broker_qty = broker_pos['quantity']
-                            
-                            # Match by side and similar price (within 2% tolerance)
-                            side_match = broker_side == side
-                            price_match = abs(broker_price - entry_price) / max(entry_price, 0.01) < 0.02 if entry_price > 0 else False
-                            
-                            if side_match and price_match:
-                                found_in_broker = True
-                                matching_broker = broker_pos['broker']
-                                break
-                        
-                        if found_in_broker:
-                            break
-                
-                if not found_in_broker:
+                symbol = self._normalize_position_symbol(trade.get('symbol', '')).upper()
+                side = str(trade.get('side', 'buy')).lower()
+                found = (symbol, side) in broker_keys or (symbol.replace('/', ''), side) in broker_keys
+                if not found:
                     phantom_trades.append(trade)
-            
-            # Handle phantom trades
-            if phantom_trades:
-                print(f"  [WARNING] Found {len(phantom_trades)} phantom trade(s) (not found in any broker):")
-                for trade in phantom_trades:
-                    symbol = trade.get('symbol')
-                    side = trade.get('side')
-                    trade_id = trade.get('trade_id')
-                    entry_time = trade.get('entry_time')
-                    
-                    # Check how old the trade is
-                    age_days = 0
-                    if entry_time:
-                        if isinstance(entry_time, str):
-                            try:
-                                from dateutil import parser
-                                entry_time = parser.parse(entry_time)
-                            except:
-                                pass
-                        if isinstance(entry_time, datetime):
-                            age_days = (datetime.now() - entry_time).total_seconds() / 86400
-                    
-                    print(f"    - {symbol} {side} (ID: {trade_id}, Age: {age_days:.1f} days)")
-                    
-                    # If trade is more than 1 day old, mark as closed (likely was closed externally)
-                    # If trade is recent (< 1 day), keep it open but log a warning (might be a timing issue)
-                    if age_days > 1:
-                        # Mark as closed - trade was likely closed externally
+
+            if not phantom_trades:
+                print("  [OK] All database opens verified at brokers")
+                return
+
+            print(f"  [WARNING] Found {len(phantom_trades)} phantom open(s) not at any broker:")
+            deleted = 0
+            for trade in phantom_trades:
+                symbol = trade.get('symbol')
+                side = trade.get('side')
+                trade_id = trade.get('trade_id')
+                entry_time = trade.get('entry_time')
+                age_min = 0.0
+                if entry_time:
+                    if isinstance(entry_time, str):
                         try:
-                            self.storage.update_trade(trade_id, {
-                                'status': 'closed',
-                                'exit_time': datetime.now(),
-                                'exit_price': trade.get('entry_price', 0),  # Use entry price as exit (no better data)
-                                'pnl': trade.get('pnl', 0)  # Keep existing P&L
-                            })
-                            print(f"      â Marked as closed (age: {age_days:.1f} days)")
-                        except Exception as e:
-                            print(f"      â Error marking trade as closed: {e}")
+                            from dateutil import parser
+                            entry_time = parser.parse(entry_time)
+                        except Exception:
+                            entry_time = None
+                    if isinstance(entry_time, datetime):
+                        age_min = (datetime.now() - entry_time.replace(tzinfo=None)).total_seconds() / 60.0
+
+                print(f"    - {symbol} {side} (ID: {trade_id}, Age: {age_min:.1f} min)")
+
+                # Grace: allow brief fill/settlement lag; after that delete (don't fake-close).
+                if age_min < grace_minutes:
+                    print(f"      [KEEP] Within {grace_minutes:.0f}m grace window")
+                    continue
+                try:
+                    if self.storage.delete_trade(str(trade_id)):
+                        deleted += 1
+                        print("      [DELETED] Phantom removed from local DB")
                     else:
-                        print(f"      â ï¸  Keeping open (recent trade, might be timing issue)")
-            else:
-                print("  â All database trades verified in brokers - no phantom trades found")
-                
+                        # Fallback: mark closed with zero PnL so it stops blocking
+                        self.storage.update_trade(str(trade_id), {
+                            'status': 'closed',
+                            'exit_time': datetime.now(),
+                            'exit_price': trade.get('entry_price', 0),
+                            'pnl': 0.0,
+                        })
+                        deleted += 1
+                        print("      [CLOSED] Phantom marked closed (delete failed)")
+                except Exception as e:
+                    print(f"      [ERROR] Failed to remove phantom: {e}")
+
+            if deleted:
+                print(f"  [OK] Removed {deleted} phantom open(s)")
+
         except Exception as e:
-            print(f"  â Error during phantom trade cleanup: {e}")
+            print(f"  [ERROR] Error during phantom trade cleanup: {e}")
             self.logger.log_error(e, {'component': 'phantom_trade_cleanup'})
     
     def _update_dashboard(self):
@@ -3382,6 +3375,12 @@ class TradingAgent:
         try:
             # Sync positions from brokers first
             self._sync_positions_from_brokers()
+            # Periodically drop DB opens that aren't at the broker (unblocks max_positions)
+            now_ts = time.time()
+            last = getattr(self, '_last_phantom_cleanup_ts', 0.0)
+            if now_ts - last >= 300:  # every 5 minutes
+                self._cleanup_phantom_trades(grace_minutes=10.0)
+                self._last_phantom_cleanup_ts = now_ts
             
             # Get account balance and positions directly from brokers (most accurate)
             balance = 0.0

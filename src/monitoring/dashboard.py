@@ -161,9 +161,20 @@ def create_dashboard_app(
                 elif entry_price > 0 and current_price > 0:
                     quantity = float(t.get('quantity', 0.0) or 0.0)
                     pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
-            elif entry_price > 0 and current_price > 0:
+            else:
+                # Phantom / unmatched: still fetch live mid for display (don't freeze at entry)
+                for broker in (app.brokers or {}).values():
+                    try:
+                        if hasattr(broker, 'get_current_price'):
+                            px = float(broker.get_current_price(t.get('symbol')) or 0)
+                            if px > 0:
+                                current_price = px
+                                break
+                    except Exception:
+                        continue
                 quantity = float(t.get('quantity', 0.0) or 0.0)
-                pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
+                if entry_price > 0 and current_price > 0 and quantity:
+                    pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
 
             quantity = float(t.get('quantity', 0.0) or 0.0)
 
@@ -196,11 +207,20 @@ def create_dashboard_app(
         equity_curve = report_data.get('equity_curve', []) if report_data else []
 
         # Prefer agent trades in Recent Trades. Hide broker *_sync history unless configured.
+        # Open rows belong in Open Positions only — Recent Trades is closed fills.
         show_synced = bool(
             (app.trading_config.get('broker_sync', {}) or {}).get('show_synced_trades_on_dashboard', False)
         )
-        agent_trades = [t for t in all_trades if '_sync' not in str(t.get('strategy') or '').lower()]
-        sync_trades = [t for t in all_trades if '_sync' in str(t.get('strategy') or '').lower()]
+        agent_trades = [
+            t for t in all_trades
+            if '_sync' not in str(t.get('strategy') or '').lower()
+            and str(t.get('status') or '').lower() == 'closed'
+        ]
+        sync_trades = [
+            t for t in all_trades
+            if '_sync' in str(t.get('strategy') or '').lower()
+            and str(t.get('status') or '').lower() == 'closed'
+        ]
         if show_synced:
             ui_trades = sorted(
                 agent_trades,
@@ -877,6 +897,55 @@ def create_dashboard_app(
             for t in to_purge:
                 app.storage.delete_trade(t['trade_id'])
             return {"success": True, "deleted": count, "message": f"Deleted {count} SYNCED $0 trades"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.post("/api/purge_phantom_opens")
+    async def purge_phantom_opens():
+        """Delete local open trades that are not present at any reachable broker."""
+        if not app.storage:
+            return {"success": False, "error": "Storage not available"}
+        try:
+            broker_open = _collect_broker_open_positions()
+            # Require at least one broker to respond (empty list is fine = flat account)
+            brokers_reachable = bool(app.brokers)
+            if not brokers_reachable:
+                return {"success": False, "error": "No brokers configured"}
+            # Probe: if every get_open_positions failed, _collect returns [] — same as flat.
+            # Call each broker once to confirm reachability.
+            ok = 0
+            for broker in app.brokers.values():
+                try:
+                    if hasattr(broker, 'get_open_positions'):
+                        broker.get_open_positions()
+                        ok += 1
+                except Exception:
+                    continue
+            if ok == 0:
+                return {"success": False, "error": "Broker position APIs unreachable; not deleting"}
+
+            local_open = app.storage.get_open_trades() or []
+            broker_keys = {
+                (_normalize_symbol(p.get('symbol')).upper().replace('/', ''), str(p.get('side', 'buy')).lower())
+                for p in broker_open
+            }
+            deleted = []
+            for t in local_open:
+                key = (
+                    _normalize_symbol(t.get('symbol')).upper().replace('/', ''),
+                    str(t.get('side', 'buy')).lower(),
+                )
+                if key in broker_keys:
+                    continue
+                tid = str(t.get('trade_id') or '')
+                if tid and app.storage.delete_trade(tid):
+                    deleted.append({'trade_id': tid, 'symbol': t.get('symbol'), 'side': t.get('side')})
+            return {
+                "success": True,
+                "deleted": len(deleted),
+                "phantoms": deleted,
+                "message": f"Deleted {len(deleted)} phantom open(s)",
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -1720,11 +1789,23 @@ async function purgeZeroTrades() {{
   }} catch(e){{}}
 }}
 
+async function purgePhantomOpens() {{
+  try {{
+    const r=await fetch('/api/purge_phantom_opens',{{method:'POST',headers:{{'Content-Type':'application/json'}}}});
+    const res=await r.json();
+    if(res.success && res.deleted>0) setTimeout(refreshData,600);
+  }} catch(e){{}}
+}}
+
 let ws=null, wsRetries=0;
 function connectWS() {{
   const proto=location.protocol==='https:'?'wss:':'ws:';
   ws=new WebSocket(proto+'//'+location.host+'/ws');
-  ws.onopen=()=>{{ wsRetries=0; document.getElementById('lastUpdate').textContent='Connected'; setTimeout(purgeZeroTrades,2000); }};
+  ws.onopen=()=>{{
+    wsRetries=0; document.getElementById('lastUpdate').textContent='Connected';
+    setTimeout(purgeZeroTrades,2000);
+    setTimeout(purgePhantomOpens,2500);
+  }};
   ws.onmessage=e=>{{ try{{handleData(JSON.parse(e.data))}}catch(ex){{}} }};
   ws.onclose=()=>{{
     wsRetries++; document.getElementById('lastUpdate').textContent='Reconnecting...';
