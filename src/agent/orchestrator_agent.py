@@ -567,6 +567,7 @@ class OrchestratorAgent(BaseAgent):
         
         weighted_score = 0.0
         total_weight = 0.0
+        directional_weight = 0.0
         signal_details = []
         
         print(f"  Weighted Voting Calculation:")
@@ -586,6 +587,9 @@ class OrchestratorAgent(BaseAgent):
             
             weighted_score += contribution
             total_weight += weight
+            # HOLD must not dilute directional consensus toward 0
+            if signal_val != 0:
+                directional_weight += weight
             
             print(f"    {agent_name}: {signal['signal'].name}, signal_val={signal_val}, confidence={confidence:.3f}, base_weight={base_weight:.2f}, multiplier={regime_multiplier:.2f}, final_weight={weight:.3f}, contribution={contribution:.4f}")
             
@@ -599,22 +603,26 @@ class OrchestratorAgent(BaseAgent):
                 'contribution': contribution
             })
         
-        if total_weight > 0:
-            normalized_score = weighted_score / total_weight
+        # Normalize by directional agents only; fall back to all-weight if everyone HOLDs
+        denom = directional_weight if directional_weight > 0 else total_weight
+        if denom > 0:
+            normalized_score = weighted_score / denom
         else:
             normalized_score = 0.0
         
         print(f"  Total contribution: {weighted_score:.4f}")
-        print(f"  Total weight: {total_weight:.4f}")
+        print(f"  Total weight: {total_weight:.4f} (directional={directional_weight:.4f})")
         print(f"  Normalized weighted_score: {normalized_score:.4f}")
         
-        # === FIX 6: Lower threshold for weighted voting ===
-        aggressive = self.config.get('aggressive_mode', False) or self.config.get('use_drl', False)
-        threshold = self.min_confidence * 0.6 if aggressive else self.min_confidence  # Was 0.7
+        # Aggressive mode lowers the vote bar so droughts don't last weeks
+        aggressive = bool(self.config.get('aggressive_mode', False)) or bool(self.config.get('use_drl', False))
+        vote_frac = 0.55 if aggressive else 0.75
+        threshold = self.min_confidence * vote_frac
         
         buy_count = sum(1 for s in filtered_signals.values() if s['signal'] == Signal.BUY)
         sell_count = sum(1 for s in filtered_signals.values() if s['signal'] == Signal.SELL)
         hold_count = sum(1 for s in filtered_signals.values() if s['signal'] == Signal.HOLD)
+        print(f"  Vote threshold: {threshold:.3f} (min_conf={self.min_confidence:.3f} x {vote_frac}, aggressive={aggressive})")
         
         if normalized_score > threshold:
             final_signal = Signal.BUY
@@ -645,15 +653,15 @@ class OrchestratorAgent(BaseAgent):
                 if agent_signal != max_confidence_signal and agent_signal != Signal.HOLD:
                     opposing_confidences.append(agent_confidence)
             
-            if max_confidence > 0.6 and max_confidence_signal != Signal.HOLD:  # Was 0.7
+            if max_confidence > 0.55 and max_confidence_signal != Signal.HOLD:
                 avg_opposing_confidence = sum(opposing_confidences) / len(opposing_confidences) if opposing_confidences else 0.0
                 
-                if max_confidence > 1.3 * avg_opposing_confidence or (max_confidence > 0.7 and avg_opposing_confidence < 0.4):  # Was 1.5/0.8/0.5
+                if max_confidence > 1.25 * avg_opposing_confidence or (max_confidence > 0.65 and avg_opposing_confidence < 0.4):
                     final_signal = max_confidence_signal
                     print(f"  🔀 Tie-breaking: Strong signal from {max_confidence_agent} ({max_confidence_signal.name}, confidence={max_confidence:.3f})")
             
-            if max_confidence > 0.7 and max_confidence_signal != Signal.HOLD:  # Was 0.8
-                weak_opposing = all(c < 0.4 for c in opposing_confidences)  # Was 0.5
+            if max_confidence > 0.65 and max_confidence_signal != Signal.HOLD:
+                weak_opposing = all(c < 0.4 for c in opposing_confidences)
                 if weak_opposing:
                     final_signal = max_confidence_signal
                     print(f"  ⚡ Strong signal override: {max_confidence_agent} ({max_confidence_signal.name}, confidence={max_confidence:.3f})")
@@ -749,18 +757,21 @@ class OrchestratorAgent(BaseAgent):
         avg_confidence_all = sum(s.get('confidence', 0) * base_weights.get(name, 0.33) * agent_weights.get(name, 1.0)
                                 for name, s in agent_signals.items()) / total_weight if total_weight > 0 else 0.0
         
+        reject_reason = None
         # Hard reject when fewer than min_agents_agreeing vote with the signal
         if self.require_agent_agreement and final_signal != Signal.HOLD:
             agreeing_count = buy_count if final_signal == Signal.BUY else sell_count
             if agreeing_count < self.min_agents_agreeing:
                 print(f"  [SKIP] Insufficient agreement: {agreeing_count}/{self.min_agents_agreeing} agents agree")
                 print(f"     Rejecting trade - require multiple agent agreement for higher quality signals")
+                reject_reason = f'agreement: {agreeing_count}/{self.min_agents_agreeing} agents agree'
                 final_signal = Signal.HOLD
                 confidence = 0.0
 
         # Long-only mode: convert SELL to HOLD (execution layer also blocks)
         if self.disable_short_trades and final_signal == Signal.SELL:
             print(f"  [SKIP] Short trades disabled - converting SELL to HOLD")
+            reject_reason = 'short_disabled: SELL converted to HOLD'
             final_signal = Signal.HOLD
             confidence = 0.0
         
@@ -776,11 +787,16 @@ class OrchestratorAgent(BaseAgent):
             confidence = min(avg_confidence_all, 0.5)
             normalized_score = abs(normalized_score)
         
+        reason = (
+            reject_reason
+            if reject_reason
+            else f'Weighted voting: {normalized_score:.3f} (BUY:{buy_count}, SELL:{sell_count}, HOLD:{hold_count})'
+        )
         return {
             'signal': final_signal,
             'confidence': confidence,
             'weighted_score': normalized_score,
-            'reason': f'Weighted voting: {normalized_score:.3f} (BUY:{buy_count}, SELL:{sell_count}, HOLD:{hold_count})',
+            'reason': reason,
             'signal_details': signal_details
         }
     

@@ -91,10 +91,10 @@ agents:
 
   orchestrator:
     enabled: true
-    min_confidence: 0.42         # Eased from 0.48 — zero trades for a week was too selective
-    consensus_threshold: 0.42
+    min_confidence: 0.35         # Lowered — 0.42 + HOLD dilution caused weeks of zero fills
+    consensus_threshold: 0.35
     require_agent_agreement: true
-    min_agents_agreeing: 2
+    min_agents_agreeing: 1       # Single strong agent can lead; was 2 and starved entries
     disable_short_trades: false  # Re-enabled — long-only starved entries when signals were SELL-heavy
     risk_reward_ratio: 3.0
     # Voting weights (normalized in code if they do not sum to 1.0)
@@ -240,8 +240,8 @@ risk:
 asset_class_strategy_config:
 
   crypto:
-    min_confidence: 0.45         # Eased from 0.52 — still above orchestrator
-    consensus_threshold: 0.45
+    min_confidence: 0.35         # Align with orchestrator — was blocking above orchestrator floor
+    consensus_threshold: 0.35
     mean_reversion_enabled: false
     stop_loss_atr_multiple: 1.5
     take_profit_rr_ratio: 3.0
@@ -256,8 +256,8 @@ asset_class_strategy_config:
       min_momentum: 0.05
 
   forex:
-    min_confidence: 0.48
-    consensus_threshold: 0.48
+    min_confidence: 0.35
+    consensus_threshold: 0.35
     mean_reversion_enabled: true
     stop_loss_atr_multiple: 1.5
     take_profit_rr_ratio: 3.0
@@ -272,8 +272,8 @@ asset_class_strategy_config:
       min_momentum: 0.005
 
   commodities:
-    min_confidence: 0.50
-    consensus_threshold: 0.50
+    min_confidence: 0.35
+    consensus_threshold: 0.35
     mean_reversion_enabled: true
     stop_loss_atr_multiple: 2.0
     take_profit_rr_ratio: 3.0
@@ -288,8 +288,8 @@ asset_class_strategy_config:
       min_momentum: 0.008
 
   stocks:
-    min_confidence: 0.48
-    consensus_threshold: 0.48
+    min_confidence: 0.35
+    consensus_threshold: 0.35
     mean_reversion_enabled: true
     stop_loss_atr_multiple: 2.0
     take_profit_rr_ratio: 3.0

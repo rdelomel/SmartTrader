@@ -333,6 +333,8 @@ class TradingAgent:
             # 6. Orchestrator Agent (performance_tracker already initialized above)
             orchestrator_config = dict(self.trading_config.get('agents', {}).get('orchestrator', {}) or {})
             orchestrator_config['use_drl'] = aggressive_config.get('enabled', False) and aggressive_config.get('use_drl', True)
+            # Voting threshold uses this — must be forwarded from top-level aggressive_mode
+            orchestrator_config['aggressive_mode'] = bool(aggressive_config.get('enabled', False))
             # Keep R:R in sync with risk.default_take_profit_rr_ratio
             risk_cfg = self.trading_config.get('risk', {}) or {}
             if 'risk_reward_ratio' not in orchestrator_config:
@@ -1326,7 +1328,7 @@ class TradingAgent:
             
             # Check execution conditions
             will_execute = (signal_value != Signal.HOLD and
-                          confidence > min_conf and
+                          confidence >= min_conf and
                           not is_vetoed and
                           not self.trading_config.get('signal_log_mode', False))
             if not will_execute:
@@ -1337,12 +1339,14 @@ class TradingAgent:
                     reason_text = str(decision.get('reason', '')).lower()
                     if 'agreement' in reason_text:
                         reason_key = 'agreement'
+                    elif 'short_disabled' in reason_text:
+                        reason_key = 'short_disabled'
                     else:
                         reason_key = 'hold'
                     reason = 'Signal is HOLD'
-                elif confidence <= min_conf:
+                elif confidence < min_conf:
                     reason_key = 'low_conf'
-                    reason = f'Confidence too low: {confidence:.3f} <= {min_conf:.3f}'
+                    reason = f'Confidence too low: {confidence:.3f} < {min_conf:.3f}'
                 elif is_vetoed:
                     reason_key = 'veto'
                     veto_reason = decision.get("reason", "Risk manager veto")
