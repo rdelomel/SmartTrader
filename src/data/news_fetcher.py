@@ -138,79 +138,104 @@ class NewsFetcher:
         if source_name in self.source_failures:
             self.source_failures[source_name] = 0
     
-    def fetch_newsapi(self, symbol: str, query: Optional[str] = None) -> List[Dict]:
-        """
-        Fetch news from NewsAPI (https://newsapi.org/)
-        Free tier: 100 requests/day, 1 request/second
-        
-        Args:
-            symbol: Trading symbol
-            query: Optional search query (defaults to symbol keywords)
-        
-        Returns:
-            List of news articles
-        """
-        if not self.newsapi_enabled:
-            return []
-        
-        source_name = "NewsAPI"
-        if self._is_source_disabled(source_name):
-            return []  # Silently skip if disabled
-        
+    from datetime import datetime, timedelta, timezone  # make sure timezone is imported
+
+def fetch_newsapi(self, symbol: str, query: Optional[str] = None, days_back: int = 7) -> List[Dict]:
+    """
+    Fetch news from NewsAPI (https://newsapi.org/)
+    Free tier: 100 requests/day, articles delayed 24h
+
+    Args:
+        symbol: Trading symbol
+        query: Optional search query (defaults to symbol keywords)
+        days_back: How many days back to search (free tier needs >= 2)
+
+    Returns:
+        List of news articles
+    """
+    if not self.newsapi_enabled:
+        return []
+
+    source_name = "NewsAPI"
+    if self._is_source_disabled(source_name):
+        return []  # Silently skip if disabled
+
+    try:
+        # Build query from symbol keywords
+        if not query:
+            symbol_keywords = self._extract_symbol_keywords(symbol) or []
+            terms = [k.strip() for k in symbol_keywords[:3] if k and k.strip()]
+
+            # Fall back to the base of the pair (or the symbol itself)
+            if not terms:
+                terms = [symbol.split('/')[0] if '/' in symbol else symbol]
+
+            # OR-join so any term matches; quote multi-word terms as phrases
+            query = ' OR '.join(f'"{t}"' if ' ' in t else t for t in terms)
+
+        query = query[:500]  # NewsAPI max query length
+
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            'q': query,
+            'language': 'en',
+            'sortBy': 'publishedAt',
+            'pageSize': 20,
+            'from': (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime('%Y-%m-%d'),
+            'apiKey': self.newsapi_key
+        }
+
+        print(f"NewsFetcher: Fetching from NewsAPI with query: {query!r}")
+        response = requests.get(url, params=params, timeout=10)
+
+        # Parse the body first so API error messages aren't lost
         try:
-            symbol_keywords = self._extract_symbol_keywords(symbol)
-            
-            # Build query from symbol keywords
-            if not query:
-                # For crypto, use coin name; for forex, use currency pair
-                if '/' in symbol:
-                    base = symbol.split('/')[0]
-                    if base.upper() in ['BTC', 'ETH', 'SOL']:
-                        query = base.lower() if base.upper() == 'BTC' else symbol_keywords[0].lower()
-                    else:
-                        query = ' '.join(symbol_keywords[:2])
-                else:
-                    query = symbol
-            
-            # NewsAPI endpoint
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'q': query,
-                'language': 'en',
-                'sortBy': 'publishedAt',
-                'pageSize': 20,
-                'from': (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d'),
-                'apiKey': self.newsapi_key
-            }
-            
-            print(f"NewsFetcher: Fetching from NewsAPI with query: {query}")
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
             data = response.json()
-            
-            articles = []
-            for article in data.get('articles', []):
-                articles.append({
-                    'title': article.get('title', ''),
-                    'content': article.get('description', '') or article.get('content', ''),
-                    'link': article.get('url', ''),
-                    'published': datetime.fromisoformat(article['publishedAt'].replace('Z', '+00:00')),
-                    'source': f"NewsAPI: {article.get('source', {}).get('name', 'Unknown')}"
-                })
-            
-            print(f"NewsFetcher: NewsAPI returned {len(articles)} articles")
-            self._record_source_success(source_name)
-            return articles
-            
-        except Exception as e:
-            error_msg = str(e)
-            # Only log non-401 errors (401 means invalid key, we'll disable it)
-            if '401' not in error_msg and 'Unauthorized' not in error_msg:
-                # Only log unexpected errors, suppress common network issues
-                if 'timeout' not in error_msg.lower() and 'connection' not in error_msg.lower():
-                    print(f"NewsFetcher: Error fetching from NewsAPI: {e}")
-            self._record_source_failure(source_name, e)
+        except ValueError:
+            data = {}
+
+        if response.status_code != 200 or data.get('status') != 'ok':
+            code = data.get('code', response.status_code)
+            message = data.get('message', response.text[:200])
+            print(f"NewsFetcher: NewsAPI error [{code}]: {message}")
+            response.raise_for_status()  # lets the except block record the failure
             return []
+
+        print(f"NewsFetcher: NewsAPI totalResults={data.get('totalResults')} for q={query!r}")
+
+        articles = []
+        for article in data.get('articles', []):
+            try:
+                title = article.get('title') or ''
+                if not title or title == '[Removed]':
+                    continue
+
+                published_raw = article.get('publishedAt')
+                if not published_raw:
+                    continue
+
+                articles.append({
+                    'title': title,
+                    'content': article.get('description') or article.get('content') or '',
+                    'link': article.get('url', ''),
+                    'published': datetime.fromisoformat(published_raw.replace('Z', '+00:00')),
+                    'source': f"NewsAPI: {(article.get('source') or {}).get('name', 'Unknown')}"
+                })
+            except Exception as parse_err:
+                print(f"NewsFetcher: Skipping malformed NewsAPI article: {parse_err}")
+                continue
+
+        print(f"NewsFetcher: NewsAPI returned {len(articles)} articles")
+        self._record_source_success(source_name)
+        return articles
+
+    except Exception as e:
+        error_msg = str(e)
+        # 401 = invalid key, handled by the failure recorder (source gets disabled)
+        if '401' not in error_msg and 'Unauthorized' not in error_msg:
+            print(f"NewsFetcher: Error fetching from NewsAPI: {e}")
+        self._record_source_failure(source_name, e)
+        return []
     
     def fetch_cryptocompare(self, symbol: str) -> List[Dict]:
         """
