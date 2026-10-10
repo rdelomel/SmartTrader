@@ -1,4 +1,8 @@
-"""Entry point for running the trading agent"""
+"""Entry point for running the trading agent.
+
+SMARTTRADER_ENGINE=v2 (default) runs the research-backed core in src/core.
+SMARTTRADER_ENGINE=v1 runs the legacy multi-agent bot in src/main.py.
+"""
 
 import sys
 import os
@@ -10,6 +14,8 @@ if project_root not in sys.path:
 
 # Import and run
 if __name__ == "__main__":
-    from src.main import main
+    if os.getenv('SMARTTRADER_ENGINE', 'v2').lower() == 'v1':
+        from src.main import main
+    else:
+        from src.core.runner import main
     main()
-

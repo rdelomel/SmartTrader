@@ -1,0 +1,43 @@
+# HUMAN-OWNED RISK LIMITS
+# The AI config manager reads these but never writes them. Every live trade and
+# every generated strategy config is checked against this file.
+
+account:
+  max_drawdown_halt_pct: 10.0      # From equity peak. Halts new entries and flattens; needs manual reset.
+  drawdown_derisk_start_pct: 4.0   # Position risk scales down linearly from here until the halt level.
+  daily_loss_pause_pct: 2.0        # No new entries for the rest of the UTC day.
+  weekly_loss_pause_pct: 4.0       # No new entries for the rest of the ISO week.
+
+per_trade:
+  max_risk_pct: 1.0                # Loss at stop as % of equity.
+  min_risk_pct: 0.1
+  default_risk_pct: 0.5
+
+portfolio:
+  max_open_risk_pct: 4.0           # Sum of risk-to-stop across open positions.
+  max_positions: 8
+  max_positions_per_asset_class:
+    forex: 4
+    metals: 2
+    crypto: 2
+    stocks: 4
+  max_leverage:                    # Notional / equity cap per position.
+    forex: 10.0
+    metals: 5.0
+    crypto: 1.0
+    stocks: 1.0
+  max_same_currency_exposure: 3    # e.g. at most 3 positions that are all short USD.
+
+# Gates a strategy must pass out-of-sample before the config manager may enable it.
+strategy_acceptance:
+  min_oos_trades: 30
+  min_oos_profit_factor: 1.15
+  min_oos_expectancy_r: 0.05
+  min_pct_profitable_folds: 0.5
+  max_oos_drawdown_pct_at_1pct_risk: 30.0
+
+# How the config manager may size the portfolio.
+allocation:
+  target_portfolio_drawdown_pct: 6.0   # Backtest DD target; buffer below the 10% halt.
+  max_risk_increase_per_update: 1.5    # A strategy's risk may grow at most 1.5x per config update.
+  probation_risk_multiplier: 0.5       # Newly enabled strategies start at half risk.

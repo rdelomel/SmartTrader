@@ -53,7 +53,7 @@ echo "📄 Refreshing configs from image..."
 docker run --rm \
   -v "$BASE_DIR/config:/output" \
   --entrypoint sh "$IMAGE" \
-  -c "cp /app/config/trading_config.yaml /app/config/broker_config.yaml /app/config/model_config.yaml /output/ && echo ok" \
+  -c "cp /app/config/*.yaml /output/ && echo ok" \
   && echo "✅ Configs refreshed" \
   || { echo "❌ Config extraction failed — check image and retry"; exit 1; }
 

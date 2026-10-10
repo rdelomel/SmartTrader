@@ -116,8 +116,8 @@ def test_dashboard_api_populates_performance_and_risk_metrics():
     assert 'data_quality' in data
     assert 'integrity_score' in data['data_quality']
 
-    # Trades should be normalized with numeric fields expected by UI.
-    assert len(data['trades']) == 3
+    # Recent Trades lists closed trades only; the open one appears under positions.
+    assert len(data['trades']) == 2
     first_trade = data['trades'][0]
     assert isinstance(first_trade['quantity'], float)
     assert isinstance(first_trade['price'], float)

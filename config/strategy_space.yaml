@@ -1,0 +1,51 @@
+# Search space for the config manager. Humans own these bounds; the optimizer
+# may only pick parameter values inside them.
+
+universe:
+  forex:
+    symbols: [EUR_USD, GBP_USD, USD_JPY, AUD_USD, USD_CAD, USD_CHF, NZD_USD]
+    allow_short: true
+  metals:
+    symbols: [XAU_USD, XAG_USD]
+    allow_short: true
+  crypto:
+    symbols: [BTC/USD, ETH/USD, SOL/USD]
+    allow_short: false             # Alpaca spot crypto cannot be shorted.
+  stocks:
+    symbols: [SPY, QQQ, AAPL, MSFT, NVDA, AMZN, GOOGL, META]
+    allow_short: false
+
+timeframes: [1d, 4h]
+
+walk_forward:
+  1d: {train_days: 1095, test_days: 365, history_years: 12}
+  4h: {train_days: 365, test_days: 91, history_years: 2}
+
+optimizer:
+  samples_per_strategy: 48
+  neighbor_smoothing_k: 5
+  min_train_trades: 15
+  random_seed: 7
+
+strategies:
+  donchian_trend:
+    entry_n:   {type: int,   min: 20,  max: 120}
+    exit_n:    {type: int,   min: 10,  max: 60}
+    stop_atr:  {type: float, min: 2.0, max: 5.0}
+    trail_atr: {type: float, min: 0.0, max: 5.0}   # 0 disables the trailing stop
+    trend_ema: {type: int,   min: 0,   max: 250}   # values below 50 disable the filter
+
+  ema_trend:
+    fast:      {type: int,   min: 5,   max: 50}
+    slow:      {type: int,   min: 30,  max: 250}
+    stop_atr:  {type: float, min: 1.5, max: 5.0}
+    trail_atr: {type: float, min: 0.0, max: 5.0}
+
+  rsi_reversion:
+    rsi_n:     {type: int,   min: 2,   max: 6}
+    lower:     {type: float, min: 5.0, max: 30.0}
+    upper:     {type: float, min: 70.0, max: 95.0}
+    trend_ema: {type: int,   min: 100, max: 250}
+    exit_ma:   {type: int,   min: 3,   max: 15}
+    stop_atr:  {type: float, min: 1.5, max: 4.0}
+    max_bars:  {type: int,   min: 3,   max: 20}

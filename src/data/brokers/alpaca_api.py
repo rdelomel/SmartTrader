@@ -200,7 +200,8 @@ class AlpacaBroker(BaseBroker):
                 'qty': str(quantity),
                 'side': 'buy' if side == OrderSide.BUY else 'sell',
                 'type': 'market' if order_type == OrderType.MARKET else 'limit',
-                'time_in_force': 'gtc' if order_type == OrderType.LIMIT else 'day'
+                # Alpaca rejects 'day' for crypto; crypto orders must be gtc or ioc.
+                'time_in_force': 'gtc' if (order_type == OrderType.LIMIT or '/' in symbol) else 'day'
             }
             if order_type == OrderType.LIMIT and price is not None:
                 order_body['limit_price'] = str(price)
