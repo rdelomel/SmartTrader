@@ -304,6 +304,17 @@ class OANDABroker(BaseBroker):
         if not account:
             return []
 
+        def implied_price(instrument: str, entry: float, pnl_usd: float, units: float, direction: int) -> float:
+            if units <= 0 or entry <= 0:
+                return entry
+            per_unit = pnl_usd / units
+            base, _, quote = instrument.partition('_')
+            # unrealizedPL is in USD; for USD-base pairs the price move is in the quote currency.
+            if base == 'USD' and quote and quote != 'USD':
+                denom = 1.0 - direction * per_unit
+                return entry / denom if denom > 0 else entry
+            return entry + direction * per_unit
+
         positions = []
         for pos in account.get('positions', []):
             long_units = float(pos.get('long', {}).get('units', 0))
@@ -313,7 +324,7 @@ class OANDABroker(BaseBroker):
                 entry_price = float(pos.get('long', {}).get('averagePrice', 0))
                 unrealized_pnl = float(pos.get('long', {}).get('unrealizedPL', 0))
                 quantity = abs(long_units)
-                current_price = entry_price + (unrealized_pnl / quantity) if quantity > 0 else entry_price
+                current_price = implied_price(pos['instrument'], entry_price, unrealized_pnl, quantity, 1)
                 positions.append({
                     'symbol': pos['instrument'],
                     'side': 'buy',
@@ -328,7 +339,7 @@ class OANDABroker(BaseBroker):
                 entry_price = float(pos.get('short', {}).get('averagePrice', 0))
                 unrealized_pnl = float(pos.get('short', {}).get('unrealizedPL', 0))
                 quantity = abs(short_units)
-                current_price = entry_price - (unrealized_pnl / quantity) if quantity > 0 else entry_price
+                current_price = implied_price(pos['instrument'], entry_price, unrealized_pnl, quantity, -1)
                 positions.append({
                     'symbol': pos['instrument'],
                     'side': 'sell',

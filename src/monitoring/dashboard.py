@@ -57,6 +57,14 @@ def create_dashboard_app(
             return ''
         return str(symbol).replace('_', '/').replace('-', '/').upper()
 
+    def _position_pnl_usd(symbol: Optional[str], side: str, quantity: float, entry: float, current: float) -> float:
+        raw = (current - entry) * quantity if side == 'buy' else (entry - current) * quantity
+        parts = _normalize_symbol(symbol).split('/')
+        # USD-base pairs (USD/JPY, USD/CAD, USD/CHF) accrue P&L in the quote currency.
+        if len(parts) == 2 and parts[0] == 'USD' and parts[1] != 'USD' and current > 0:
+            return raw / current
+        return raw
+
     def _symbols_match(a: Optional[str], b: Optional[str]) -> bool:
         na = _normalize_symbol(a).replace('/', '')
         nb = _normalize_symbol(b).replace('/', '')
@@ -160,7 +168,7 @@ def create_dashboard_app(
                     pnl = float(broker_pnl)
                 elif entry_price > 0 and current_price > 0:
                     quantity = float(t.get('quantity', 0.0) or 0.0)
-                    pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
+                    pnl = _position_pnl_usd(t.get('symbol'), t_side, quantity, entry_price, current_price)
             else:
                 # Phantom / unmatched: still fetch live mid for display (don't freeze at entry)
                 for broker in (app.brokers or {}).values():
@@ -174,7 +182,7 @@ def create_dashboard_app(
                         continue
                 quantity = float(t.get('quantity', 0.0) or 0.0)
                 if entry_price > 0 and current_price > 0 and quantity:
-                    pnl = (current_price - entry_price) * quantity if t_side == 'buy' else (entry_price - current_price) * quantity
+                    pnl = _position_pnl_usd(t.get('symbol'), t_side, quantity, entry_price, current_price)
 
             quantity = float(t.get('quantity', 0.0) or 0.0)
 
