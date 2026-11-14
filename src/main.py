@@ -2147,7 +2147,7 @@ class TradingAgent:
             cleaned_positions = []
             for position in open_positions:
                 symbol = position.get('symbol')
-                trade_id = position.get('id')
+                trade_id = position.get('trade_id') or position.get('id')
                 side = position.get('side', 'buy')
                 entry_price = position.get('entry_price', 0)
                 quantity = position.get('quantity', 0)
