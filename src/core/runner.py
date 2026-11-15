@@ -89,6 +89,11 @@ def main() -> None:
     while running['on']:
         try:
             status = engine.run_once()
+            try:
+                from .integrity_sync import sync_broker_only_to_storage
+                sync_broker_only_to_storage(engine)
+            except Exception:
+                log.exception('integrity sync failed')
             app.update_dashboard_data({'skip_counters': dict(engine.state.counters), 'engine_status': status})
         except Exception:
             log.exception('engine loop error')
