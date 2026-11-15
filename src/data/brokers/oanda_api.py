@@ -31,26 +31,43 @@ class OANDABroker(BaseBroker):
         """Normalise symbol to OANDA underscore format (EUR/USD -> EUR_USD)."""
         return symbol.replace('/', '_').upper()
 
+    CONNECT_ATTEMPTS = 4
+    CONNECT_BACKOFF_SECONDS = (2, 5, 10)
+
     def connect(self) -> bool:
-        """Connect to OANDA and verify credentials."""
-        try:
-            response = self.session.get(f"{self.base_url}/v3/accounts")
-            response.raise_for_status()
-            data = response.json()
-            accounts = data.get('accounts', [])
-            if not accounts:
-                logger.error("No OANDA accounts found")
-                return False
-            if not self.account_id:
-                self.account_id = accounts[0]['id']
-                logger.info(f"Auto-detected OANDA account ID: {self.account_id}")
-            self.connected = True
-            logger.info("Connected to OANDA")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to connect to OANDA: {e}")
-            self.connected = False
-            return False
+        """Connect to OANDA and verify credentials.
+
+        Retries with backoff: the practice API intermittently answers valid tokens
+        with 401/5xx/timeouts, and a single failure used to disable the broker.
+        """
+        import time
+        last_error = None
+        for attempt in range(1, self.CONNECT_ATTEMPTS + 1):
+            try:
+                # Content-Type is irrelevant on a GET; drop it for this call.
+                response = self.session.get(f"{self.base_url}/v3/accounts",
+                                            headers={'Content-Type': None}, timeout=20)
+                response.raise_for_status()
+                accounts = response.json().get('accounts', [])
+                if not accounts:
+                    logger.error("No OANDA accounts found")
+                    self.connected = False
+                    return False
+                if not self.account_id:
+                    self.account_id = accounts[0]['id']
+                    logger.info(f"Auto-detected OANDA account ID: {self.account_id}")
+                self.connected = True
+                logger.info("Connected to OANDA")
+                return True
+            except Exception as e:
+                last_error = e
+                if attempt < self.CONNECT_ATTEMPTS:
+                    delay = self.CONNECT_BACKOFF_SECONDS[min(attempt - 1, len(self.CONNECT_BACKOFF_SECONDS) - 1)]
+                    logger.warning(f"OANDA connect attempt {attempt}/{self.CONNECT_ATTEMPTS} failed: {e}; retrying in {delay}s")
+                    time.sleep(delay)
+        logger.error(f"Failed to connect to OANDA: {last_error}")
+        self.connected = False
+        return False
 
     def disconnect(self) -> bool:
         self.connected = False

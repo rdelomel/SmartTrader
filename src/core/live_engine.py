@@ -157,6 +157,7 @@ class LiveEngine:
                  limits: Optional[Dict] = None, space: Optional[Dict] = None, governor_dir: str = 'data'):
         self.brokers = brokers
         self.storage = storage
+        self.governor_dir = governor_dir
         self.limits = limits or load_limits()
         self.space = space or load_space()
         self.config_path = config_path
@@ -194,6 +195,16 @@ class LiveEngine:
         os.makedirs(os.path.dirname(self.event_log) or '.', exist_ok=True)
         with open(self.event_log, 'a', encoding='utf-8') as f:
             f.write(json.dumps(rec, default=str) + '\n')
+
+    def add_broker(self, name: str, broker) -> None:
+        """Register a broker that connected after startup (shared dict, governor, history provider)."""
+        self.brokers[name] = broker
+        if name not in self.governors:
+            self.governors[name] = RiskGovernor(
+                self.limits, os.path.join(self.governor_dir, f'governor_state_{name}.json'))
+        if name == 'oanda':
+            self.provider.oanda = broker
+        self._event('broker_added', broker=name)
 
     def _count(self, key: str) -> None:
         self.state.counters[key] = self.state.counters.get(key, 0) + 1
