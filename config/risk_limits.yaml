@@ -3,10 +3,10 @@
 # every generated strategy config is checked against this file.
 
 account:
-  max_drawdown_halt_pct: 10.0      # From equity peak. Halts new entries and flattens; needs manual reset.
-  drawdown_derisk_start_pct: 4.0   # Position risk scales down linearly from here until the halt level.
-  daily_loss_pause_pct: 2.0        # No new entries for the rest of the UTC day.
-  weekly_loss_pause_pct: 4.0       # No new entries for the rest of the ISO week.
+  max_drawdown_halt_pct: 5.0      # From equity peak. Halts new entries and flattens; needs manual reset.
+  drawdown_derisk_start_pct: 2.5   # Position risk scales down linearly from here until the halt level.
+  daily_loss_pause_pct: 1.0        # No new entries for the rest of the UTC day.
+  weekly_loss_pause_pct: 2.5       # No new entries for the rest of the ISO week.
 
 per_trade:
   max_risk_pct: 1.0                # Loss at stop as % of equity.
@@ -14,7 +14,7 @@ per_trade:
   default_risk_pct: 0.5
 
 portfolio:
-  max_open_risk_pct: 4.0           # Sum of risk-to-stop across open positions.
+  max_open_risk_pct: 2.5           # Sum of risk-to-stop across open positions.
   max_positions: 8
   max_positions_per_asset_class:
     forex: 4
@@ -38,6 +38,6 @@ strategy_acceptance:
 
 # How the config manager may size the portfolio.
 allocation:
-  target_portfolio_drawdown_pct: 6.0   # Backtest DD target; buffer below the 10% halt.
+  target_portfolio_drawdown_pct: 3.0   # Backtest DD target; buffer below the 10% halt.
   max_risk_increase_per_update: 1.5    # A strategy's risk may grow at most 1.5x per config update.
   probation_risk_multiplier: 0.5       # Newly enabled strategies start at half risk.

@@ -63,27 +63,6 @@ strategies:
     sharpe: 1.172
     max_drawdown_pct: 1.084
     pct_profitable_folds: 60.0
-- symbol: USD_CAD
-  asset_class: forex
-  strategy: donchian_trend
-  timeframe: 4h
-  params:
-    entry_n: 81
-    exit_n: 54
-    stop_atr: 3.084
-    trail_atr: 2.991
-    trend_ema: 27
-  risk_pct: 0.332
-  allow_short: true
-  probation: false
-  oos:
-    trades: 39.0
-    profit_factor: 2.319
-    expectancy_r: 0.323
-    win_rate_pct: 30.769
-    sharpe: 1.33
-    max_drawdown_pct: 6.032
-    pct_profitable_folds: 60.0
 - symbol: USD_JPY
   asset_class: forex
   strategy: rsi_reversion
@@ -193,6 +172,6 @@ strategies:
     sharpe: 0.835
     max_drawdown_pct: 3.189
     pct_profitable_folds: 70.0
-change_explanation: Paper experiment prune 4 weak strategies (BTC/USD, GOOGL, META,
+change_explanation: 2026-11-16 removed USD_CAD (6% standalone OOS drawdown, 31% win rate). Paper experiment prune 4 weak strategies (BTC/USD, GOOGL, META,
   SPY). Kept 8 highest PF/WR OOS names; top 5 off probation. Re-run config_manager
   to regenerate from strategy_space when ready.
