@@ -408,10 +408,20 @@ class OANDABroker(BaseBroker):
             symbol = self._to_oanda_fmt(symbol)
             url = f"{self.base_url}/v3/accounts/{self.account_id}/positions/{symbol}/close"
             body = {}
-            if side == OrderSide.BUY or side is None:
-                body['longUnits'] = 'ALL'
-            if side == OrderSide.SELL or side is None:
-                body['shortUnits'] = 'ALL'
+            if side is None:
+                # OANDA rejects (400) a close request for a side that has no units, so look up
+                # which side(s) are actually open instead of asking for both.
+                pos_resp = self.session.get(f"{self.base_url}/v3/accounts/{self.account_id}/positions/{symbol}")
+                pos_resp.raise_for_status()
+                pos = pos_resp.json().get('position', {})
+                if float((pos.get('long') or {}).get('units') or 0) != 0:
+                    body['longUnits'] = 'ALL'
+                if float((pos.get('short') or {}).get('units') or 0) != 0:
+                    body['shortUnits'] = 'ALL'
+                if not body:
+                    return True  # nothing open to close
+            else:
+                body['longUnits' if side == OrderSide.BUY else 'shortUnits'] = 'ALL'
             response = self.session.put(url, json=body)
             response.raise_for_status()
             return True
