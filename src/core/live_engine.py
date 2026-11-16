@@ -38,6 +38,8 @@ MISSING_CHECKS_BEFORE_CLOSED = 2
 MAX_ORDER_ATTEMPTS = 3
 STATE_PATH = os.path.join('data', 'live_engine_state.json')
 EVENT_LOG = os.path.join('data', 'live_engine_events.jsonl')
+EQUITY_LOG = os.path.join('data', 'equity_curve.jsonl')
+EQUITY_SNAPSHOT_EVERY = pd.Timedelta(minutes=15)
 
 
 def symbol_key(symbol: str) -> str:
@@ -171,6 +173,8 @@ class LiveEngine:
             cache_dir=os.path.join('data', 'live_history'), max_age_hours=0.05,
             oanda_broker=brokers.get('oanda'),
         )
+        self.equity_log = os.path.join(os.path.dirname(event_log) or '.', 'equity_curve.jsonl')
+        self._last_equity_snapshot: Optional[datetime] = None
         self.config: Dict = {'strategies': []}
         self._config_mtime: Optional[float] = None
         self.state = self._load_state()
@@ -205,6 +209,21 @@ class LiveEngine:
         if name == 'oanda':
             self.provider.oanda = broker
         self._event('broker_added', broker=name)
+
+    def _snapshot_equity(self, equities: Dict[str, float], now: datetime) -> None:
+        """Append broker equity to an equity-curve log (every 15 min) for drawdown tracking."""
+        if not equities:
+            return
+        last = self._last_equity_snapshot
+        if last is not None and now - last < EQUITY_SNAPSHOT_EVERY.to_pytimedelta():
+            return
+        self._last_equity_snapshot = now
+        try:
+            os.makedirs(os.path.dirname(self.equity_log) or '.', exist_ok=True)
+            with open(self.equity_log, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'at': now.isoformat(timespec='seconds'), 'equity': equities}) + '\n')
+        except OSError:
+            log.exception('equity snapshot failed')
 
     def _count(self, key: str) -> None:
         self.state.counters[key] = self.state.counters.get(key, 0) + 1
@@ -254,6 +273,7 @@ class LiveEngine:
             if 'flatten_all' in self.governors[name].update_equity(eq, now):
                 self._flatten(name, now, self.governors[name].state.halt_reason)
 
+        self._snapshot_equity(equities, now)
         broker_positions = {n: self._broker_positions(n) for n in equities}
         self._reconcile(broker_positions, now)
         self._check_stops(now)
@@ -466,7 +486,8 @@ class LiveEngine:
         self._put(pos)
         self._count('entries')
         self._event('entry', symbol=sym, direction=d, units=units, price=fill, stop=stop,
-                    risk_pct=round(decision.risk_pct, 3), notes=decision.reasons)
+                    risk_pct=round(decision.risk_pct, 3), equity=round(equity, 2),
+                    strategy=act.get('strategy'), notes=decision.reasons)
         if self.storage:
             self.storage.store_trade({
                 'trade_id': trade_id, 'symbol': sym, 'side': 'buy' if d > 0 else 'sell', 'quantity': units,
