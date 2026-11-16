@@ -1,6 +1,8 @@
 """OANDA API implementation for forex trading"""
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import time
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -20,6 +22,13 @@ class OANDABroker(BaseBroker):
         environment = 'practice' if testnet else 'live'
         self.base_url = 'https://api-fxpractice.oanda.com' if environment == 'practice' else 'https://api-fxtrade.oanda.com'
         self.session = requests.Session()
+        # OANDA's practice API intermittently answers valid requests with 401/502/503/504.
+        # Retry reads (GET) only; orders are POST/PUT and must never be replayed automatically.
+        retry = Retry(total=4, backoff_factor=0.5, status_forcelist=(401, 502, 503, 504),
+                      allowed_methods=frozenset(['GET']), raise_on_status=False)
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
         self.session.headers.update({
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json',
