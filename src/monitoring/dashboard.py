@@ -8,6 +8,7 @@ from datetime import datetime
 import asyncio
 from ..data.brokers.base_broker import OrderSide
 from .reporting import TradingReporter
+from src.core.integrity_sync import close_stale_local_opens
 
 
 def _serialize_datetime(obj):
@@ -116,6 +117,12 @@ def create_dashboard_app(
 
     def _build_trusted_dashboard_snapshot() -> Dict:
         """Build a broker-reconciled, reporting-backed dashboard snapshot."""
+        # Manual closes on OANDA must flip local opens → closed so Total Trades updates
+        try:
+            if app.storage and app.brokers:
+                close_stale_local_opens(app.storage, app.brokers)
+        except Exception as e:
+            print(f"stale open close on snapshot: {e}")
 
         def _normalize_trade(trade: Dict) -> Dict:
             quantity = trade.get('quantity') or trade.get('filled_qty') or 0.0
@@ -282,10 +289,11 @@ def create_dashboard_app(
             )
         normalized_recent_trades = [_normalize_trade(t) for t in ui_trades[:50]]
 
+        # Count every agent close (including ~breakeven). Do not drop tiny P&L — that
+        # kept Total Trades stuck when manual broker closes were recorded near zero.
         agent_closed = [
             t for t in closed_trades
             if '_sync' not in str(t.get('strategy') or '').lower()
-            and abs(t.get('pnl', 0) or 0) >= 0.001
         ]
         fallback_net = sum((t.get('pnl', 0) or 0) for t in agent_closed)
         fallback_wins = sum(1 for t in agent_closed if (t.get('pnl') or 0) > 0)
@@ -324,7 +332,7 @@ def create_dashboard_app(
                 'realized_pnl': float(realized_pnl),
                 'unrealized_pnl': float(unrealized_pnl),
                 'trading_mode': _trading_mode(),
-                'total_trades': int(general.get('total_trades', len(agent_closed)) or 0),
+                'total_trades': int(max(int(general.get('total_trades') or 0), len(agent_closed))),
                 'win_rate': float(general.get('win_rate', fallback_wr) or 0.0),
                 'loss_rate': float(general.get('loss_rate', (100.0 - fallback_wr) if agent_closed else 0.0) or 0.0),
                 'sharpe_ratio': float(advanced.get('sharpe_ratio', 0.0) or 0.0),
@@ -749,26 +757,36 @@ def create_dashboard_app(
 
     @app.get("/api/reconcile_open_trades")
     async def reconcile_open_trades():
-        """Reconcile local open trades with broker open positions."""
+        """Close local opens missing at broker, then report integrity."""
         if not app.storage:
             return {
                 'success': False,
                 'error': 'Storage not available',
                 'stale_local_trades': [],
-                'broker_only_positions': []
+                'broker_only_positions': [],
+                'closed_stale': [],
             }
+        closed = []
+        try:
+            if app.brokers:
+                closed = close_stale_local_opens(app.storage, app.brokers)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
         snapshot = _build_trusted_dashboard_snapshot()
         dq = snapshot.get('data_quality', {})
         return {
             'success': True,
+            'closed_stale_count': len(closed),
+            'closed_stale': closed,
             'local_open_count': dq.get('local_open_count', 0),
             'broker_open_count': dq.get('broker_open_count', 0),
             'matched_open_trades': dq.get('matched_open_trades', 0),
             'integrity_score': dq.get('integrity_score', 0.0),
             'stale_local_trades': dq.get('stale_local_trades', []),
             'broker_only_positions': dq.get('broker_only_positions', []),
-            'last_reconciled_at': dq.get('last_reconciled_at')
+            'last_reconciled_at': dq.get('last_reconciled_at'),
+            'total_trades': (snapshot.get('performance') or {}).get('total_trades'),
         }
 
     @app.get("/api/report")

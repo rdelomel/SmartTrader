@@ -25,6 +25,7 @@ from .config_manager import LIVE_PATH, load_space, validate_live_config
 from .data import HistoryProvider, latest_closed_bars
 from .risk_governor import OpenPosition, RiskGovernor, TradeProposal, load_limits
 from .strategies import generate
+from .integrity_sync import full_integrity_pass, close_stale_local_opens
 
 log = logging.getLogger('smarttrader.v2')
 
@@ -282,6 +283,13 @@ class LiveEngine:
         self._snapshot_equity(equities, now)
         broker_positions = {n: self._broker_positions(n) for n in equities}
         self._reconcile(broker_positions, now)
+        # Close DB opens that disappeared at the broker (manual close on OANDA, etc.)
+        try:
+            closed = close_stale_local_opens(self.storage, self.brokers, now=now)
+            for c in closed:
+                self._event("stale_local_closed", **c)
+        except Exception as e:
+            self._event("stale_close_error", error=str(e))
         self._check_stops(now)
         self._evaluate_new_bars(now)
         self._execute_pending(equities, broker_positions, now)
