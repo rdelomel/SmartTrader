@@ -16,6 +16,9 @@ class AlpacaBroker(BaseBroker):
         super().__init__()
         self.api_key = api_key
         self.api_secret = api_secret
+        self.testnet = bool(testnet)
+        self.is_paper = self.testnet
+        self.environment = 'paper' if self.testnet else 'live'
         self.base_url = 'https://paper-api.alpaca.markets' if testnet else 'https://api.alpaca.markets'
         self.headers = {
             'APCA-API-KEY-ID': api_key,

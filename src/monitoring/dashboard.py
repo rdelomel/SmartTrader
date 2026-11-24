@@ -70,6 +70,30 @@ def create_dashboard_app(
         nb = _normalize_symbol(b).replace('/', '')
         return bool(na and nb and na == nb)
 
+
+    def _trading_mode() -> str:
+        """PAPER if any connected broker is practice/paper; LIVE only when all funded live."""
+        brokers = getattr(app, 'brokers', None) or {}
+        if not brokers:
+            return 'PAPER'
+        paperish = False
+        liveish = False
+        for b in brokers.values():
+            if getattr(b, 'is_paper', None) is True or getattr(b, 'testnet', None) is True:
+                paperish = True
+            elif getattr(b, 'is_paper', None) is False or getattr(b, 'testnet', None) is False:
+                liveish = True
+            env = str(getattr(b, 'environment', '') or '').lower()
+            if env in ('practice', 'paper', 'testnet', 'demo'):
+                paperish = True
+            if env == 'live':
+                liveish = True
+        if paperish:
+            return 'PAPER'
+        if liveish:
+            return 'LIVE'
+        return 'PAPER'
+
     def _collect_broker_open_positions() -> List[Dict]:
         positions: List[Dict] = []
         if not app.brokers:
@@ -81,6 +105,9 @@ def create_dashboard_app(
                         'broker': broker_name,
                         'symbol': _normalize_symbol(pos.get('symbol', '')),
                         'side': str(pos.get('side', 'buy')).lower(),
+                        'stop_loss': pos.get('stop_loss'),
+                        'take_profit': pos.get('take_profit'),
+                        'broker_trade_id': pos.get('broker_trade_id'),
                         'raw': pos
                     })
             except Exception as e:
@@ -193,8 +220,16 @@ def create_dashboard_app(
                 'quantity': quantity,
                 'entry_price': entry_price,
                 'current_price': current_price,
-                'stop_loss': t.get('stop_loss'),
-                'take_profit': t.get('take_profit'),
+                'stop_loss': (
+                    (broker_match or {}).get('stop_loss')
+                    or (broker_match or {}).get('raw', {}).get('stop_loss')
+                    or t.get('stop_loss')
+                ),
+                'take_profit': (
+                    (broker_match or {}).get('take_profit')
+                    or (broker_match or {}).get('raw', {}).get('take_profit')
+                    or t.get('take_profit')
+                ),
                 'pnl': pnl,
                 'strategy': t.get('strategy', 'smarttrader'),
                 'verified_at_broker': verified,
@@ -288,6 +323,7 @@ def create_dashboard_app(
                 'total_return': float(total_return),
                 'realized_pnl': float(realized_pnl),
                 'unrealized_pnl': float(unrealized_pnl),
+                'trading_mode': _trading_mode(),
                 'total_trades': int(general.get('total_trades', len(agent_closed)) or 0),
                 'win_rate': float(general.get('win_rate', fallback_wr) or 0.0),
                 'loss_rate': float(general.get('loss_rate', (100.0 - fallback_wr) if agent_closed else 0.0) or 0.0),
@@ -398,7 +434,9 @@ def create_dashboard_app(
   .logo-glyph{{width:26px;height:26px;font-size:13px}}
   #lastUpdate{{display:none}}
   .btn-sm{{padding:4px 10px;font-size:11px}}
-  .live-pill{{padding:2px 7px;font-size:10px}}
+  .live-pill.paper{{background:rgba(234,179,8,.15);border-color:rgba(234,179,8,.4);color:#eab308}}
+.live-pill.paper .live-dot{{background:#eab308;box-shadow:0 0 8px #eab308}}
+.live-pill{{padding:2px 7px;font-size:10px}}
 }}
 
 /* — Main padding — */
@@ -1163,6 +1201,8 @@ a{{color:var(--blue);text-decoration:none}}
   display:flex;align-items:center;justify-content:center;
   font-size:16px;
 }}
+.live-pill.paper{{background:rgba(234,179,8,.15);border-color:rgba(234,179,8,.4);color:#eab308}}
+.live-pill.paper .live-dot{{background:#eab308;box-shadow:0 0 8px #eab308}}
 .live-pill{{
   display:inline-flex;align-items:center;gap:6px;
   background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.2);
@@ -1343,7 +1383,7 @@ tbody tr:last-child{{border-bottom:none}}
     <div class="logo-glyph">&#9650;</div>
     SmartTrader
   </div>
-  <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+  <div class="live-pill" id="mode-pill"><div class="live-dot"></div><span id="mode-label">…</span></div>
   <div class="topbar-right">
     <button class="btn-sm" onclick="refreshData()">&#8635; Refresh</button>
     <span id="lastUpdate">Connecting...</span>
@@ -1514,6 +1554,16 @@ function updateMetrics(data) {{
   const p=data.performance||{{}}, dq=data.data_quality||{{}};
   const eq=data.equity||0, bal=data.balance||0;
   const ret=p.total_return||0, rpnl=p.realized_pnl||0, upnl=p.unrealized_pnl||0;
+  const mode=(p.trading_mode||data.trading_mode||'PAPER').toUpperCase();
+  const modeEl=document.getElementById('mode-label');
+  const pill=document.getElementById('mode-pill');
+  if(modeEl) modeEl.textContent=mode;
+  if(pill){{
+    pill.classList.toggle('paper', mode==='PAPER'||mode==='DEMO');
+    pill.classList.toggle('live', mode==='LIVE');
+    pill.title=mode==='LIVE'?'Funded live trading':'Practice / paper — no real funds';
+  }}
+
   const sharpe=p.sharpe_ratio||0, wr=p.win_rate||0, lr=p.loss_rate||0;
   const trades=p.total_trades||0, pf=p.profit_factor||0, exp=p.expectancy||0;
   const integ=dq.integrity_score||0;

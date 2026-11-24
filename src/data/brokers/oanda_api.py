@@ -19,7 +19,10 @@ class OANDABroker(BaseBroker):
         super().__init__()
         self.api_key = api_key
         self.account_id = account_id
-        environment = 'practice' if testnet else 'live'
+        self.testnet = bool(testnet)
+        self.environment = 'practice' if self.testnet else 'live'
+        self.is_paper = self.testnet  # DEMO / practice account — never treat as funded live
+        environment = self.environment
         self.base_url = 'https://api-fxpractice.oanda.com' if environment == 'practice' else 'https://api-fxtrade.oanda.com'
         self.session = requests.Session()
         # OANDA's practice API intermittently answers valid requests with 401/502/503/504.
@@ -376,7 +379,85 @@ class OANDABroker(BaseBroker):
                     'unrealized_pnl': unrealized_pnl
                 })
 
+        # Enrich with stop / take-profit from open trades (positions endpoint has no SL/TP)
+        try:
+            by_side = self._open_trade_exits()
+            for pos in positions:
+                key = (pos['symbol'], pos['side'])
+                extra = by_side.get(key) or {}
+                if extra.get('stop_loss') is not None:
+                    pos['stop_loss'] = extra['stop_loss']
+                if extra.get('take_profit') is not None:
+                    pos['take_profit'] = extra['take_profit']
+                if extra.get('trade_id'):
+                    pos['broker_trade_id'] = extra['trade_id']
+                pos['raw'] = {**pos, **extra}
+        except Exception as e:
+            logger.warning(f"Could not enrich OANDA positions with SL/TP: {e}")
+
         return positions
+
+    def _open_trade_exits(self) -> Dict:
+        """Map (instrument, side) -> stop_loss / take_profit from open trades."""
+        url = f"{self.base_url}/v3/accounts/{self.account_id}/openTrades"
+        response = self.session.get(url, timeout=20)
+        response.raise_for_status()
+        out: Dict = {}
+        for tr in response.json().get('trades', []) or []:
+            try:
+                units = float(tr.get('currentUnits') or tr.get('initialUnits') or 0)
+                if units == 0:
+                    continue
+                side = 'buy' if units > 0 else 'sell'
+                instrument = tr.get('instrument')
+                sl = tr.get('stopLossOrder') or {}
+                tp = tr.get('takeProfitOrder') or {}
+                ts = tr.get('trailingStopLossOrder') or {}
+                stop_px = None
+                if sl.get('price'):
+                    stop_px = float(sl['price'])
+                elif ts.get('distance') is not None:
+                    # trailing: approximate as current ± distance is not stored as price; skip price
+                    stop_px = float(ts['price']) if ts.get('price') else None
+                tp_px = float(tp['price']) if tp.get('price') else None
+                out[(instrument, side)] = {
+                    'stop_loss': stop_px,
+                    'take_profit': tp_px,
+                    'trade_id': tr.get('id'),
+                    'entry_price': float(tr.get('price') or 0) or None,
+                    'unrealized_pnl': float(tr.get('unrealizedPL') or 0),
+                }
+            except Exception:
+                continue
+        return out
+
+    def modify_trade_exits(
+        self,
+        trade_id: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        instrument: Optional[str] = None,
+    ) -> bool:
+        """Update SL and/or TP on an existing OANDA trade (broker-side protection)."""
+        try:
+            body: Dict = {}
+            precision = 5
+            if instrument:
+                jpy = any(x in instrument for x in ('JPY',))
+                precision = 3 if jpy else 5
+            if stop_loss is not None:
+                body['stopLoss'] = {'price': str(round(float(stop_loss), precision)), 'timeInForce': 'GTC'}
+            if take_profit is not None:
+                body['takeProfit'] = {'price': str(round(float(take_profit), precision)), 'timeInForce': 'GTC'}
+            if not body:
+                return False
+            url = f"{self.base_url}/v3/accounts/{self.account_id}/trades/{trade_id}/orders"
+            response = self.session.put(url, json=body, timeout=20)
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to modify OANDA trade {trade_id} exits: {e}")
+            return False
 
     def get_order_status(self, order_id: str) -> Dict:
         """Get order status."""

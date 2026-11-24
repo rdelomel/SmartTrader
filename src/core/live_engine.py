@@ -40,6 +40,9 @@ STATE_PATH = os.path.join('data', 'live_engine_state.json')
 EVENT_LOG = os.path.join('data', 'live_engine_events.jsonl')
 EQUITY_LOG = os.path.join('data', 'equity_curve.jsonl')
 EQUITY_SNAPSHOT_EVERY = pd.Timedelta(minutes=15)
+# Reward:risk multiple for broker-side take profit on entry. 0 disables TP.
+TAKE_PROFIT_R = float(os.environ.get('SMARTTRADER_TP_R', '2.0') or 0)
+
 
 
 def symbol_key(symbol: str) -> str:
@@ -97,10 +100,13 @@ def evaluate_bar(strategy: str, params: Dict, allow_short: bool, df: pd.DataFram
         if sig.trail_atr > 0 and np.isfinite(a):
             if pos.direction > 0:
                 pos.extreme = max(pos.extreme, float(df['high'].iloc[i]))
-                pos.stop = max(pos.stop, pos.extreme - sig.trail_atr * a)
+                new_stop = max(pos.stop, pos.extreme - sig.trail_atr * a)
             else:
                 pos.extreme = min(pos.extreme, float(df['low'].iloc[i]))
-                pos.stop = min(pos.stop, pos.extreme + sig.trail_atr * a)
+                new_stop = min(pos.stop, pos.extreme + sig.trail_atr * a)
+            if new_stop != pos.stop:
+                pos.stop = new_stop
+                self._push_broker_stop(pos)
         if sig.entry[i] == -pos.direction:
             new_dir = -pos.direction
             if new_dir > 0 or allow_short:
@@ -466,9 +472,20 @@ class LiveEngine:
             self._count('rejected: size rounds to zero')
             return True
 
-        hard_stop = round(stop, 5) if broker_name == 'oanda' else None
-        res = broker.place_order(symbol=sym, side=OrderSide.BUY if d > 0 else OrderSide.SELL,
-                                 quantity=units, order_type=OrderType.MARKET, stop_loss=hard_stop)
+        # Always attach broker-side stop on OANDA (and TP when TAKE_PROFIT_R > 0).
+        hard_stop = round(stop, 5)
+        hard_tp = None
+        if TAKE_PROFIT_R and TAKE_PROFIT_R > 0 and act['stop_dist'] > 0:
+            hard_tp = round(price + d * act['stop_dist'] * TAKE_PROFIT_R, 5)
+        place_kwargs = dict(
+            symbol=sym,
+            side=OrderSide.BUY if d > 0 else OrderSide.SELL,
+            quantity=units,
+            order_type=OrderType.MARKET,
+            stop_loss=hard_stop if broker_name == 'oanda' else hard_stop,
+            take_profit=hard_tp if broker_name == 'oanda' else hard_tp,
+        )
+        res = broker.place_order(**place_kwargs)
         if not res or not res.get('success'):
             self._count('order_failed')
             self._event('order_failed', symbol=sym, error=(res or {}).get('error'))
@@ -476,6 +493,9 @@ class LiveEngine:
 
         fill = float(res.get('price') or 0.0) or price
         stop = fill - d * act['stop_dist']
+        take_profit = None
+        if TAKE_PROFIT_R and TAKE_PROFIT_R > 0 and act['stop_dist'] > 0:
+            take_profit = fill + d * act['stop_dist'] * TAKE_PROFIT_R
         trade_id = f'v2-{symbol_key(sym)}-{now.strftime("%Y%m%d%H%M%S")}'
         pos = Position(
             symbol=sym, asset_class=ac, broker=broker_name, strategy=act['strategy'], timeframe=act['timeframe'],
@@ -486,12 +506,13 @@ class LiveEngine:
         self._put(pos)
         self._count('entries')
         self._event('entry', symbol=sym, direction=d, units=units, price=fill, stop=stop,
-                    risk_pct=round(decision.risk_pct, 3), equity=round(equity, 2),
+                    take_profit=take_profit, risk_pct=round(decision.risk_pct, 3), equity=round(equity, 2),
                     strategy=act.get('strategy'), notes=decision.reasons)
         if self.storage:
             self.storage.store_trade({
                 'trade_id': trade_id, 'symbol': sym, 'side': 'buy' if d > 0 else 'sell', 'quantity': units,
-                'entry_price': fill, 'stop_loss': stop, 'entry_time': now.replace(tzinfo=None),
+                'entry_price': fill, 'stop_loss': stop, 'take_profit': take_profit,
+                'entry_time': now.replace(tzinfo=None),
                 'status': 'open', 'strategy': f'v2_{act["strategy"]}',
             })
         return True

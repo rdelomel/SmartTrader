@@ -12,6 +12,9 @@ per_trade:
   max_risk_pct: 1.0                # Loss at stop as % of equity.
   min_risk_pct: 0.1
   default_risk_pct: 0.5
+  # Broker-side take profit as multiple of stop distance (live_engine TAKE_PROFIT_R / SMARTTRADER_TP_R).
+  # 2.0 = 2R target. Set 0 to disable fixed TP (trail / signal exits only).
+  take_profit_r: 2.0
 
 portfolio:
   max_open_risk_pct: 2.5           # Sum of risk-to-stop across open positions.
